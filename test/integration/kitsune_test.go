@@ -45,13 +45,13 @@ func TestClient_SendReceiveAndDeleteSingleMessage(t *testing.T) {
 	payload := uuid.New().String()
 
 	// Send message
-	if err := sqsClient.SendMessage(&testQueueName, payload); err != nil {
+	if err := sqsClient.SendMessage(testQueueName, payload); err != nil {
 		t.Fatalf("Error sending message to SQS: %v ", err)
 	}
 	t.Logf("Sent message to queue: %s with Payload:\n%s", testQueueName, payload)
 
 	// Receive message
-	messages, err := sqsClient.ReceiveMessage(&testQueueName)
+	messages, err := sqsClient.ReceiveMessage(testQueueName)
 	if err != nil {
 		t.Fatalf("Error receiving message from SQS: %v ", err)
 	}
@@ -63,7 +63,7 @@ func TestClient_SendReceiveAndDeleteSingleMessage(t *testing.T) {
 	}
 
 	// Delete message
-	err = sqsClient.DeleteMessage(&testQueueName, messages[0])
+	err = sqsClient.DeleteMessage(testQueueName, messages[0].ReceiptHandle)
 	if err != nil {
 		t.Fatalf("Error deleting message from SQS queue: %v", err)
 	}
@@ -77,13 +77,13 @@ func TestClient_ExtendVisibilityTimeout(t *testing.T) {
 	payload := uuid.New().String()
 
 	// Send message
-	if err := sqsClient.SendMessage(&testQueueName, payload); err != nil {
+	if err := sqsClient.SendMessage(testQueueName, payload); err != nil {
 		t.Fatalf("Error sending message to SQS: %v ", err)
 	}
 	t.Logf("Sent message to queue: %s with Payload:\n%s", testQueueName, payload)
 
 	// Receive message first time
-	messages, err := sqsClient.ReceiveMessage(&testQueueName)
+	messages, err := sqsClient.ReceiveMessage(testQueueName)
 	if err != nil {
 		t.Fatalf("Error receiving message from SQS: %v ", err)
 	}
@@ -98,15 +98,15 @@ func TestClient_ExtendVisibilityTimeout(t *testing.T) {
 	// Extend message visibility and receive n times
 	// Keep wait time to under 20s to make this work
 	var timeout int64 = 3
-	for n := 0; n < 5; n++ {
-		err = sqsClient.ChangeMessageVisibility(&testQueueName, message, &timeout)
+	for n := 0; n < 3; n++ {
+		err = sqsClient.ChangeMessageVisibility(testQueueName, message, timeout)
 		if err != nil {
 			t.Fatalf("Error extending visibility time: %v ", err)
 		}
 
 		t.Logf("Extended visibility timeout for message with receipt: %s", *message.ReceiptHandle)
 
-		messages, err := sqsClient.ReceiveMessage(&testQueueName)
+		messages, err := sqsClient.ReceiveMessage(testQueueName)
 		if err != nil {
 			t.Fatalf("Error receiving message from SQS: %v ", err)
 		}
@@ -120,7 +120,7 @@ func TestClient_ExtendVisibilityTimeout(t *testing.T) {
 	}
 
 	// Delete message
-	err = sqsClient.DeleteMessage(&testQueueName, message)
+	err = sqsClient.DeleteMessage(testQueueName, message.ReceiptHandle)
 	if err != nil {
 		t.Fatalf("Error deleting message from SQS queue: %v", err)
 	}

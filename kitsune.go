@@ -9,6 +9,7 @@ import (
 	"strconv"
 )
 
+// Client object handles communication with SQS
 type Client struct {
 	opts options
 
@@ -21,7 +22,7 @@ type options struct {
 	initialVisibilityTimeout int64
 	maxVisibilityTimeout     int64
 	backoffFactor            int64
-	backoffFunction          func(int64, int64, int64, int64) *int64
+	backoffFunction          func(int64, int64, int64, int64) int64
 	waitTimeSeconds          int64
 	attributeNames           []*string
 }
@@ -36,15 +37,48 @@ var defaultClientOptions = options{
 	attributeNames:           []*string{aws.String("ApproximateReceiveCount")},
 }
 
+// ClientOption sets configuration options for a Client.
 type ClientOption func(*options)
 
-func DelaySeconds(d int64) ClientOption                                      { return func(o *options) { o.delaySeconds = d } }
-func MaxNumberOfMessages(m int64) ClientOption                               { return func(o *options) { o.maxNumberOfMessages = m } }
-func InitialVisibilityTimeout(i int64) ClientOption                          { return func(o *options) { o.initialVisibilityTimeout = i } }
-func MaxVisibilityTimeout(m int64) ClientOption                              { return func(o *options) { o.maxVisibilityTimeout = m } }
-func BackoffFactor(b int64) ClientOption                                     { return func(o *options) { o.backoffFactor = b } }
-func BackoffFunction(f func(int64, int64, int64, int64) *int64) ClientOption { return func(o *options) { o.backoffFunction = f } }
-func WaitTimeSeconds(w int64) ClientOption                                   { return func(o *options) { o.waitTimeSeconds = w } }
+// DelaySeconds is used to set the DelaySeconds property on the Client which is how many seconds the message will be unavaible
+// once its put on a queue.
+func DelaySeconds(d int64) ClientOption {
+	return func(o *options) { o.delaySeconds = d }
+}
+
+// MaxNumberOfMessages sets the maximum number of messages can be returned each time the Client fetches messages.
+func MaxNumberOfMessages(m int64) ClientOption {
+	return func(o *options) { o.maxNumberOfMessages = m }
+}
+
+// InitialVisibilityTimeout sets the initial time used when changing message visibility. The length of subsequent changes will be
+// determined by strategy defined by the backoff function used.
+func InitialVisibilityTimeout(i int64) ClientOption {
+	return func(o *options) { o.initialVisibilityTimeout = i }
+}
+
+// MaxVisibilityTimeout sets the maxiumum time a message can be made unavailable by chaning message visibility.
+func MaxVisibilityTimeout(m int64) ClientOption {
+	return func(o *options) { o.maxVisibilityTimeout = m }
+}
+
+// BackoffFactor sets the backoff factor which is a paramter used by the backoff function.
+func BackoffFactor(b int64) ClientOption {
+	return func(o *options) { o.backoffFactor = b }
+}
+
+// BackoffFunction sets the function which computes the next visibility timeout.
+func BackoffFunction(f func(int64, int64, int64, int64) int64) ClientOption {
+	return func(o *options) { o.backoffFunction = f }
+}
+
+// WaitTimeSeconds sets the time a client will wait for messages on each call.
+func WaitTimeSeconds(w int64) ClientOption {
+	return func(o *options) { o.waitTimeSeconds = w }
+}
+
+// AttributeNames sets the message attributes to be returned when fetching messages. ApproximateReceiveCount is always returned
+// because it is used when calculating backoff.
 func AttributeNames(s ...string) ClientOption {
 	return func(o *options) {
 		for _, str := range s {
@@ -53,6 +87,7 @@ func AttributeNames(s ...string) ClientOption {
 	}
 }
 
+// NewClient returns a new Client with configuration set as defined by the ClientOptions.
 func NewClient(sqs sqsiface.SQSAPI, opt ...ClientOption) *Client {
 	opts := defaultClientOptions
 	for _, o := range opt {
@@ -65,8 +100,9 @@ func NewClient(sqs sqsiface.SQSAPI, opt ...ClientOption) *Client {
 	}
 }
 
-func (c *Client) SendMessage(queueName *string, payload string) error {
-	queueURL, err := c.getQueueUrl(queueName)
+// SendMessage sends a message to the specified queue.
+func (c *Client) SendMessage(queueName string, payload string) error {
+	queueURL, err := c.getQueueURL(&queueName)
 	if err != nil {
 		return err
 	}
@@ -81,8 +117,9 @@ func (c *Client) SendMessage(queueName *string, payload string) error {
 	return err
 }
 
-func (c *Client) SendMessageWithAttributes(queueName *string, payload *string, attributes map[string]*sqs.MessageAttributeValue) error {
-	queueURL, err := c.getQueueUrl(queueName)
+// SendMessageWithAttributes sends a message to the specified queue with attributes.
+func (c *Client) SendMessageWithAttributes(queueName string, payload string, attributes map[string]*sqs.MessageAttributeValue) error {
+	queueURL, err := c.getQueueURL(&queueName)
 	if err != nil {
 		return err
 	}
@@ -90,7 +127,7 @@ func (c *Client) SendMessageWithAttributes(queueName *string, payload *string, a
 	smi := &sqs.SendMessageInput{
 		DelaySeconds:      &c.opts.delaySeconds,
 		MessageAttributes: attributes,
-		MessageBody:       payload,
+		MessageBody:       &payload,
 		QueueUrl:          queueURL,
 	}
 
@@ -98,8 +135,9 @@ func (c *Client) SendMessageWithAttributes(queueName *string, payload *string, a
 	return err
 }
 
-func (c *Client) ReceiveMessage(queueName *string) ([]*sqs.Message, error) {
-	queueURL, err := c.getQueueUrl(queueName)
+// ReceiveMessage polls the specified queue and returns the fetched messages.
+func (c *Client) ReceiveMessage(queueName string) ([]*sqs.Message, error) {
+	queueURL, err := c.getQueueURL(&queueName)
 	if err != nil {
 		return nil, err
 	}
@@ -116,8 +154,10 @@ func (c *Client) ReceiveMessage(queueName *string) ([]*sqs.Message, error) {
 	return output.Messages, err
 }
 
-func (c *Client) ChangeMessageVisibility(queueName *string, message *sqs.Message, timeout *int64) error {
-	queueURL, err := c.getQueueUrl(queueName)
+// ChangeMessageVisibility changes the visibilty of a message. Essentialy putting it back in the queue and unavailable for a
+// specified amount of time.
+func (c *Client) ChangeMessageVisibility(queueName string, message *sqs.Message, timeout int64) error {
+	queueURL, err := c.getQueueURL(&queueName)
 	if err != nil {
 		return err
 	}
@@ -125,14 +165,16 @@ func (c *Client) ChangeMessageVisibility(queueName *string, message *sqs.Message
 	cmvi := &sqs.ChangeMessageVisibilityInput{
 		QueueUrl:          queueURL,
 		ReceiptHandle:     message.ReceiptHandle,
-		VisibilityTimeout: timeout,
+		VisibilityTimeout: &timeout,
 	}
 
 	_, err = c.awsSqs.ChangeMessageVisibility(cmvi)
 	return err
 }
 
-func (c *Client) Backoff(queueName *string, message *sqs.Message) error {
+// Backoff is used for changing message visibility based on a calculated amount of time determined by a back off function
+// configured on the Client.
+func (c *Client) Backoff(queueName string, message *sqs.Message) error {
 	receivedCount, err := strconv.Atoi(*message.Attributes["ApproximateReceiveCount"])
 	if err != nil {
 		return errors.New("error getting received count")
@@ -144,53 +186,54 @@ func (c *Client) Backoff(queueName *string, message *sqs.Message) error {
 	return c.ChangeMessageVisibility(queueName, message, timeout)
 }
 
-func (c *Client) DeleteMessage(queueName *string, message *sqs.Message) error {
-	queueURL, err := c.getQueueUrl(queueName)
+// DeleteMessage removes a message from the queue.
+func (c *Client) DeleteMessage(queueName string, receiptHandle *string) error {
+	queueURL, err := c.getQueueURL(&queueName)
 	if err != nil {
 		return err
 	}
 
 	dmi := &sqs.DeleteMessageInput{
 		QueueUrl:      queueURL,
-		ReceiptHandle: message.ReceiptHandle,
+		ReceiptHandle: receiptHandle,
 	}
 
 	_, err = c.awsSqs.DeleteMessage(dmi)
 	return err
 }
 
-func (c *Client) getQueueUrl(queueName *string) (*string, error) {
+func (c *Client) getQueueURL(queueName *string) (*string, error) {
 	output, err := c.awsSqs.GetQueueUrl(&sqs.GetQueueUrlInput{QueueName: queueName})
 	return output.QueueUrl, err
 }
 
-func ExponentialBackoff(retryCount int64, minBackoff int64, maxBackof int64, backoffFactor int64) *int64 {
+// ExponentialBackoff can be configured on a client to achieve an exponential backoff strategy based on how many times the
+// message is received.
+func ExponentialBackoff(retryCount, minBackoff, maxBackof, backoffFactor int64) int64 {
 	receiveCount := min(retryCount, 9999)
 	retryNumber := max(receiveCount-1, 0)
+	expTimeout := int64(math.Pow(float64(backoffFactor), float64(retryNumber)) * float64(minBackoff))
 
-	expTimeout := int64(math.Pow(float64(backoffFactor), float64(retryNumber))*float64(minBackoff))
-
-	timeout := min(expTimeout, maxBackof)
-	return &timeout
+	return min(expTimeout, maxBackof)
 }
 
-func LinearBackoff(retryCount int64, minBackoff int64, maxBackof int64, backoffFactor int64) *int64 {
-	i := min(minBackoff+(retryCount-1)*backoffFactor, maxBackof)
-	return &i
+// LinearBackoff can be configured on a Client to achieve a linear backoff strategy based on how many times a message is received.
+func LinearBackoff(retryCount, minBackoff, maxBackof, backoffFactor int64) int64 {
+	return min(minBackoff+(retryCount-1)*backoffFactor, maxBackof)
 }
 
 func min(a, b int64) int64 {
 	if a < b {
 		return a
-	} else {
-		return b
 	}
+
+	return b
 }
 
 func max(a, b int64) int64 {
 	if a > b {
 		return a
-	} else {
-		return b
 	}
+
+	return b
 }
