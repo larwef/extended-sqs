@@ -2,12 +2,27 @@ package kitsune
 
 import (
 	"errors"
+	"fmt"
 	"github.com/aws/aws-sdk-go/aws"
+	"github.com/aws/aws-sdk-go/service/s3/s3iface"
 	"github.com/aws/aws-sdk-go/service/sqs"
 	"github.com/aws/aws-sdk-go/service/sqs/sqsiface"
 	"math"
 	"strconv"
 )
+
+const (
+	// The maximum size of a SQS payload is 262,144 bytes
+	maxMessageSize = 256 * 1024
+	// The maximum number of custom attributes are 10
+	maxNumberOfAttributes = 10
+)
+
+// ErrorMaxMessageSizeExceeded is returned when the combined size of the payload and the message attributes exceeds maxMessageSize.
+var ErrorMaxMessageSizeExceeded = fmt.Errorf("maximum message size of %d bytes exceeded", maxMessageSize)
+
+// ErrorMaxNumberOfAttributesExceeded is returned when the number of attributes exceeds maxNumberOfAttributes.
+var ErrorMaxNumberOfAttributesExceeded = fmt.Errorf("maximum number of attributes of %d exceeded", maxNumberOfAttributes)
 
 // Client object handles communication with SQS
 type Client struct {
@@ -17,6 +32,8 @@ type Client struct {
 }
 
 type options struct {
+	awsS3                    s3iface.S3API
+	forceS3                  bool
 	delaySeconds             int64
 	maxNumberOfMessages      int64
 	initialVisibilityTimeout int64
@@ -28,6 +45,8 @@ type options struct {
 }
 
 var defaultClientOptions = options{
+	awsS3:                    nil,
+	forceS3:                  false,
 	delaySeconds:             0,
 	maxNumberOfMessages:      10,
 	initialVisibilityTimeout: 60,
@@ -39,6 +58,18 @@ var defaultClientOptions = options{
 
 // ClientOption sets configuration options for a Client.
 type ClientOption func(*options)
+
+// AwsS3 is used to set an S3 client to store large messages (or all messages if forceS3 is set to true). There is no cleanup or
+// deleting of messages. It is recomended to set a lifecycle policy on the bucket used. Remeber to let the messages be in the
+// bucket for at least as long as the retention period on the queue to avoid dropping messages.
+func AwsS3(i s3iface.S3API) ClientOption {
+	return func(o *options) { o.awsS3 = i }
+}
+
+// ForceS3 set if all messages should be saved to S3
+func ForceS3(b bool) ClientOption {
+	return func(o *options) { o.forceS3 = b }
+}
 
 // DelaySeconds is used to set the DelaySeconds property on the Client which is how many seconds the message will be unavaible
 // once its put on a queue.
@@ -102,23 +133,27 @@ func NewClient(sqs sqsiface.SQSAPI, opt ...ClientOption) *Client {
 
 // SendMessage sends a message to the specified queue.
 func (c *Client) SendMessage(queueName string, payload string) error {
-	queueURL, err := c.getQueueURL(&queueName)
-	if err != nil {
-		return err
-	}
-
-	smi := &sqs.SendMessageInput{
-		DelaySeconds: &c.opts.delaySeconds,
-		MessageBody:  &payload,
-		QueueUrl:     queueURL,
-	}
-
-	_, err = c.awsSqs.SendMessage(smi)
-	return err
+	return c.sendMessage(queueName, payload, nil)
 }
 
 // SendMessageWithAttributes sends a message to the specified queue with attributes.
 func (c *Client) SendMessageWithAttributes(queueName string, payload string, attributes map[string]*sqs.MessageAttributeValue) error {
+	return c.sendMessage(queueName, payload, attributes)
+}
+
+func (c *Client) sendMessage(queueName string, payload string, attributes map[string]*sqs.MessageAttributeValue) error {
+	return c.sendToSQS(queueName, payload, attributes)
+}
+
+func (c *Client) sendToSQS(queueName string, payload string, attributes map[string]*sqs.MessageAttributeValue) error {
+	if len(attributes) > maxNumberOfAttributes {
+		return ErrorMaxNumberOfAttributesExceeded
+	}
+
+	if getMessageSize(payload, attributes) > maxMessageSize {
+		return ErrorMaxMessageSizeExceeded
+	}
+
 	queueURL, err := c.getQueueURL(&queueName)
 	if err != nil {
 		return err
@@ -205,6 +240,16 @@ func (c *Client) DeleteMessage(queueName string, receiptHandle *string) error {
 func (c *Client) getQueueURL(queueName *string) (*string, error) {
 	output, err := c.awsSqs.GetQueueUrl(&sqs.GetQueueUrlInput{QueueName: queueName})
 	return output.QueueUrl, err
+}
+
+func getMessageSize(payload string, attributes map[string]*sqs.MessageAttributeValue) int {
+	size := len(payload)
+
+	for key, value := range attributes {
+		size += len(key) + len(*value.DataType) + len(*value.StringValue)
+	}
+
+	return size
 }
 
 // ExponentialBackoff can be configured on a client to achieve an exponential backoff strategy based on how many times the

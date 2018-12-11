@@ -9,6 +9,8 @@ import (
 	"github.com/aws/aws-sdk-go/service/sqs"
 	"github.com/google/uuid"
 	"github.com/larwef/kitsune"
+	"github.com/larwef/kitsune/test"
+	"io/ioutil"
 	"testing"
 )
 
@@ -126,4 +128,81 @@ func TestClient_ExtendVisibilityTimeout(t *testing.T) {
 	}
 
 	t.Logf("Message with recept: %s deleted from SQS Queue", *message.ReceiptHandle)
+}
+
+func TestClient_SendReceiveAndDeleteLargeMessage(t *testing.T) {
+	sqsClient := getClient(t)
+
+	payload, err := ioutil.ReadFile("../testdata/size262145Bytes.txt")
+	test.AssertNotError(t, err)
+
+	// Send message
+	if err := sqsClient.SendMessage(testQueueName, string(payload)); err != nil {
+		t.Fatalf("Error sending message to SQS: %v ", err)
+	}
+	t.Logf("Sent message to queue: %s.\n", testQueueName)
+
+	// Receive message
+	messages, err := sqsClient.ReceiveMessage(testQueueName)
+	if err != nil {
+		t.Fatalf("Error receiving message from SQS: %v ", err)
+	}
+
+	t.Logf("Received message from SQS queue: %s.\n", testQueueName)
+
+	if *messages[0].Body != string(payload) {
+		t.Fatalf("Expected: %s. Actual: %s", payload, *messages[0].Body)
+	}
+
+	// Delete message
+	err = sqsClient.DeleteMessage(testQueueName, messages[0].ReceiptHandle)
+	if err != nil {
+		t.Fatalf("Error deleting message from SQS queue: %v", err)
+	}
+
+	t.Logf("Message with recept: %s deleted from SQS Queue", *messages[0].ReceiptHandle)
+
+	t.Logf("Payload:\n%s", *messages[0].Body)
+}
+
+func TestClient_SendReceiveAndDeleteLargeMessageWithAttributes(t *testing.T) {
+	sqsClient := getClient(t)
+
+	payload, err := ioutil.ReadFile("../testdata/size262080Bytes.txt")
+	test.AssertNotError(t, err)
+
+	attributes := make(map[string]*sqs.MessageAttributeValue)
+
+	attributes["attribute1"] = &sqs.MessageAttributeValue{DataType: aws.String("String"), StringValue: aws.String("TestAttribute1")}
+	attributes["attribute2"] = &sqs.MessageAttributeValue{DataType: aws.String("String"), StringValue: aws.String("TestAttribute2")}
+	attributes["attribute3"] = &sqs.MessageAttributeValue{DataType: aws.String("String"), StringValue: aws.String("TestAttribute3")}
+	attributes["attribute4"] = &sqs.MessageAttributeValue{DataType: aws.String("String"), StringValue: aws.String("TestAttribute4")}
+
+	// Send message
+	if err := sqsClient.SendMessageWithAttributes(testQueueName, string(payload), attributes); err != nil {
+		t.Fatalf("Error sending message to SQS: %v ", err)
+	}
+	t.Logf("Sent message to queue: %s.\n", testQueueName)
+
+	// Receive message
+	messages, err := sqsClient.ReceiveMessage(testQueueName)
+	if err != nil {
+		t.Fatalf("Error receiving message from SQS: %v ", err)
+	}
+
+	t.Logf("Received message from SQS queue: %s.\n", testQueueName)
+
+	if *messages[0].Body != string(payload) {
+		t.Fatalf("Expected: %s. Actual: %s", payload, *messages[0].Body)
+	}
+
+	// Delete message
+	err = sqsClient.DeleteMessage(testQueueName, messages[0].ReceiptHandle)
+	if err != nil {
+		t.Fatalf("Error deleting message from SQS queue: %v", err)
+	}
+
+	t.Logf("Message with recept: %s deleted from SQS Queue", *messages[0].ReceiptHandle)
+
+	t.Logf("Payload:\n%s", *messages[0].Body)
 }
