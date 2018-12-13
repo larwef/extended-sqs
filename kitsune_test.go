@@ -3,14 +3,15 @@ package kitsune
 import (
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/service/sqs"
+	"github.com/aws/aws-sdk-go/service/sqs/sqsiface"
 	"github.com/larwef/kitsune/test"
 	"io/ioutil"
 	"strconv"
 	"testing"
 )
 
-// Currently this is testing the mock just as much as the Client, but since the mock is made to be used by other packages needing
-// to mock the client for testing these tests might be useful. See the integration tests for more proper tests of the Client.
+// Currently this is testing the mock just as much as the awsSQSClient, but since the mock is made to be used by other packages needing
+// to mock the client for testing these tests might be useful. See the integration tests for more proper tests of the awsSQSClient.
 
 func TestClient_SendMessage(t *testing.T) {
 	for i := 1; i <= 100; i++ {
@@ -26,7 +27,7 @@ func TestClient_ReceiveMessage(t *testing.T) {
 
 func TestClient_SendMessage_MaxSize(t *testing.T) {
 	sqsMock := test.NewSQSMock(5, int64(10))
-	sqsClient := NewClient(sqsMock)
+	sqsClient := getClient(sqsMock, defaultClientOptions)
 
 	payload, err := ioutil.ReadFile("test/testdata/size262144Bytes.txt")
 	test.AssertNotError(t, err)
@@ -42,7 +43,7 @@ func TestClient_SendMessage_MaxSize(t *testing.T) {
 
 func TestClient_SendMessageWithAttributes_MaxSize(t *testing.T) {
 	sqsMock := test.NewSQSMock(5, int64(10))
-	sqsClient := NewClient(sqsMock)
+	sqsClient := getClient(sqsMock, defaultClientOptions)
 
 	payload, err := ioutil.ReadFile("test/testdata/size262080Bytes.txt")
 	test.AssertNotError(t, err)
@@ -65,7 +66,7 @@ func TestClient_SendMessageWithAttributes_MaxSize(t *testing.T) {
 
 func TestClient_SendMessage_OverMaxSizeS3NotConfigured(t *testing.T) {
 	sqsMock := test.NewSQSMock(5, int64(10))
-	sqsClient := NewClient(sqsMock)
+	sqsClient := getClient(sqsMock, defaultClientOptions)
 
 	payload, err := ioutil.ReadFile("test/testdata/size262145Bytes.txt")
 	test.AssertNotError(t, err)
@@ -79,7 +80,7 @@ func TestClient_SendMessage_OverMaxSizeS3NotConfigured(t *testing.T) {
 
 func TestClient_SendMessageWithAttributes_OverMaxSizeS3NotConfigured(t *testing.T) {
 	sqsMock := test.NewSQSMock(5, int64(10))
-	sqsClient := NewClient(sqsMock)
+	sqsClient := getClient(sqsMock, defaultClientOptions)
 
 	payload, err := ioutil.ReadFile("test/testdata/size262080Bytes.txt")
 	test.AssertNotError(t, err)
@@ -100,7 +101,7 @@ func TestClient_SendMessageWithAttributes_OverMaxSizeS3NotConfigured(t *testing.
 
 func TestClient_SendMessageWithAttributes_MaxNoOfAttributesExceeded(t *testing.T) {
 	sqsMock := test.NewSQSMock(5, int64(10))
-	sqsClient := NewClient(sqsMock)
+	sqsClient := getClient(sqsMock, defaultClientOptions)
 
 	payload := "TestPayload"
 
@@ -126,9 +127,19 @@ func TestClient_SendMessageWithAttributes_MaxNoOfAttributesExceeded(t *testing.T
 }
 
 // Helper functions
+func getClient(awsSQS sqsiface.SQSAPI, opts options) *Client {
+	return &Client{
+		awsSQSClient: &sqsClient{
+			awsSQS: awsSQS,
+			opts:   &opts,
+		},
+		opts: opts,
+	}
+}
+
 func sendNMessages(t *testing.T, n int) {
 	sqsMock := test.NewSQSMock(5, int64(n+10))
-	sqsClient := NewClient(sqsMock)
+	sqsClient := getClient(sqsMock, defaultClientOptions)
 
 	sqsMock.CreateQueueIfNotExists("test-queue")
 
@@ -147,7 +158,7 @@ func sendNMessages(t *testing.T, n int) {
 
 func receiveNMessages(t *testing.T, n int) {
 	sqsMock := test.NewSQSMock(5, int64(n+10))
-	sqsClient := NewClient(sqsMock)
+	sqsClient := getClient(sqsMock, defaultClientOptions)
 
 	sqsMock.CreateQueueIfNotExists("test-queue")
 

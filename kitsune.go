@@ -4,36 +4,26 @@ import (
 	"errors"
 	"fmt"
 	"github.com/aws/aws-sdk-go/aws"
+	"github.com/aws/aws-sdk-go/aws/session"
 	"github.com/aws/aws-sdk-go/service/s3/s3iface"
 	"github.com/aws/aws-sdk-go/service/sqs"
-	"github.com/aws/aws-sdk-go/service/sqs/sqsiface"
 	"math"
 	"strconv"
 )
-
-const (
-	// The maximum size of a SQS payload is 262,144 bytes
-	maxMessageSize = 256 * 1024
-	// The maximum number of custom attributes are 10
-	maxNumberOfAttributes = 10
-)
-
-// ErrorMaxMessageSizeExceeded is returned when the combined size of the payload and the message attributes exceeds maxMessageSize.
-var ErrorMaxMessageSizeExceeded = fmt.Errorf("maximum message size of %d bytes exceeded", maxMessageSize)
-
-// ErrorMaxNumberOfAttributesExceeded is returned when the number of attributes exceeds maxNumberOfAttributes.
-var ErrorMaxNumberOfAttributesExceeded = fmt.Errorf("maximum number of attributes of %d exceeded", maxNumberOfAttributes)
 
 // Client object handles communication with SQS
 type Client struct {
 	opts options
 
-	awsSqs sqsiface.SQSAPI
+	awsConfig aws.Config
+
+	awsSQSClient *sqsClient
 }
 
 type options struct {
-	awsS3                    s3iface.S3API
-	forceS3                  bool
+	awsS3   s3iface.S3API
+	forceS3 bool
+
 	delaySeconds             int64
 	maxNumberOfMessages      int64
 	initialVisibilityTimeout int64
@@ -42,11 +32,13 @@ type options struct {
 	backoffFunction          func(int64, int64, int64, int64) int64
 	waitTimeSeconds          int64
 	attributeNames           []*string
+	messageAttributeNames    []*string
 }
 
 var defaultClientOptions = options{
-	awsS3:                    nil,
-	forceS3:                  false,
+	awsS3:   nil,
+	forceS3: false,
+
 	delaySeconds:             0,
 	maxNumberOfMessages:      10,
 	initialVisibilityTimeout: 60,
@@ -56,7 +48,7 @@ var defaultClientOptions = options{
 	attributeNames:           []*string{aws.String("ApproximateReceiveCount")},
 }
 
-// ClientOption sets configuration options for a Client.
+// ClientOption sets configuration options for a awsSQSClient.
 type ClientOption func(*options)
 
 // AwsS3 is used to set an S3 client to store large messages (or all messages if forceS3 is set to true). There is no cleanup or
@@ -71,13 +63,13 @@ func ForceS3(b bool) ClientOption {
 	return func(o *options) { o.forceS3 = b }
 }
 
-// DelaySeconds is used to set the DelaySeconds property on the Client which is how many seconds the message will be unavaible
+// DelaySeconds is used to set the DelaySeconds property on the awsSQSClient which is how many seconds the message will be unavaible
 // once its put on a queue.
 func DelaySeconds(d int64) ClientOption {
 	return func(o *options) { o.delaySeconds = d }
 }
 
-// MaxNumberOfMessages sets the maximum number of messages can be returned each time the Client fetches messages.
+// MaxNumberOfMessages sets the maximum number of messages can be returned each time the awsSQSClient fetches messages.
 func MaxNumberOfMessages(m int64) ClientOption {
 	return func(o *options) { o.maxNumberOfMessages = m }
 }
@@ -108,107 +100,70 @@ func WaitTimeSeconds(w int64) ClientOption {
 	return func(o *options) { o.waitTimeSeconds = w }
 }
 
-// AttributeNames sets the message attributes to be returned when fetching messages. ApproximateReceiveCount is always returned
-// because it is used when calculating backoff.
+// AttributeNames sets the attributes to be returned when fetching messages. ApproximateReceiveCount is always returned because it
+// is used when calculating backoff.
 func AttributeNames(s ...string) ClientOption {
 	return func(o *options) {
-		for _, str := range s {
-			o.attributeNames = append(o.attributeNames, &str)
+		for i := range s {
+			o.attributeNames = append(o.attributeNames, &s[i])
 		}
 	}
 }
 
-// NewClient returns a new Client with configuration set as defined by the ClientOptions.
-func NewClient(sqs sqsiface.SQSAPI, opt ...ClientOption) *Client {
+// MessageAttributeNames sets the message attributes to be returned when fetching messages. ApproximateReceiveCount is always returned
+// because it is used when calculating backoff.
+func MessageAttributeNames(s ...string) ClientOption {
+	return func(o *options) {
+		for i := range s {
+			o.messageAttributeNames = append(o.messageAttributeNames, &s[i])
+		}
+	}
+}
+
+// NewClient returns a new awsSQSClient with configuration set as defined by the ClientOptions.
+func NewClient(awsConfig *aws.Config, opt ...ClientOption) (*Client, error) {
+	awsSession, err := session.NewSession(awsConfig)
+	if err != nil {
+		return nil, fmt.Errorf("Error getting AWS awsSession: %v ", err)
+	}
+
 	opts := defaultClientOptions
 	for _, o := range opt {
 		o(&opts)
 	}
 
 	return &Client{
-		opts:   opts,
-		awsSqs: sqs,
-	}
+		opts: opts,
+		awsSQSClient: &sqsClient{
+			awsSQS: sqs.New(awsSession),
+			opts:   &opts,
+		},
+	}, nil
 }
 
 // SendMessage sends a message to the specified queue.
 func (c *Client) SendMessage(queueName string, payload string) error {
-	return c.sendMessage(queueName, payload, nil)
+	return c.awsSQSClient.sendMessage(queueName, payload, nil)
 }
 
 // SendMessageWithAttributes sends a message to the specified queue with attributes.
 func (c *Client) SendMessageWithAttributes(queueName string, payload string, attributes map[string]*sqs.MessageAttributeValue) error {
-	return c.sendMessage(queueName, payload, attributes)
-}
-
-func (c *Client) sendMessage(queueName string, payload string, attributes map[string]*sqs.MessageAttributeValue) error {
-	return c.sendToSQS(queueName, payload, attributes)
-}
-
-func (c *Client) sendToSQS(queueName string, payload string, attributes map[string]*sqs.MessageAttributeValue) error {
-	if len(attributes) > maxNumberOfAttributes {
-		return ErrorMaxNumberOfAttributesExceeded
-	}
-
-	if getMessageSize(payload, attributes) > maxMessageSize {
-		return ErrorMaxMessageSizeExceeded
-	}
-
-	queueURL, err := c.getQueueURL(&queueName)
-	if err != nil {
-		return err
-	}
-
-	smi := &sqs.SendMessageInput{
-		DelaySeconds:      &c.opts.delaySeconds,
-		MessageAttributes: attributes,
-		MessageBody:       &payload,
-		QueueUrl:          queueURL,
-	}
-
-	_, err = c.awsSqs.SendMessage(smi)
-	return err
+	return c.awsSQSClient.sendMessage(queueName, payload, attributes)
 }
 
 // ReceiveMessage polls the specified queue and returns the fetched messages.
 func (c *Client) ReceiveMessage(queueName string) ([]*sqs.Message, error) {
-	queueURL, err := c.getQueueURL(&queueName)
-	if err != nil {
-		return nil, err
-	}
-
-	rmi := &sqs.ReceiveMessageInput{
-		AttributeNames:      c.opts.attributeNames,
-		MaxNumberOfMessages: &c.opts.maxNumberOfMessages,
-		QueueUrl:            queueURL,
-		VisibilityTimeout:   &c.opts.initialVisibilityTimeout,
-		WaitTimeSeconds:     &c.opts.waitTimeSeconds,
-	}
-
-	output, err := c.awsSqs.ReceiveMessage(rmi)
-	return output.Messages, err
+	return c.awsSQSClient.receiveMessage(queueName)
 }
 
 // ChangeMessageVisibility changes the visibilty of a message. Essentialy putting it back in the queue and unavailable for a
 // specified amount of time.
 func (c *Client) ChangeMessageVisibility(queueName string, message *sqs.Message, timeout int64) error {
-	queueURL, err := c.getQueueURL(&queueName)
-	if err != nil {
-		return err
-	}
-
-	cmvi := &sqs.ChangeMessageVisibilityInput{
-		QueueUrl:          queueURL,
-		ReceiptHandle:     message.ReceiptHandle,
-		VisibilityTimeout: &timeout,
-	}
-
-	_, err = c.awsSqs.ChangeMessageVisibility(cmvi)
-	return err
+	return c.awsSQSClient.changeMessageVisibility(queueName, message, timeout)
 }
 
 // Backoff is used for changing message visibility based on a calculated amount of time determined by a back off function
-// configured on the Client.
+// configured on the awsSQSClient.
 func (c *Client) Backoff(queueName string, message *sqs.Message) error {
 	receivedCount, err := strconv.Atoi(*message.Attributes["ApproximateReceiveCount"])
 	if err != nil {
@@ -218,38 +173,12 @@ func (c *Client) Backoff(queueName string, message *sqs.Message) error {
 	receivedCount64 := int64(receivedCount)
 
 	timeout := c.opts.backoffFunction(receivedCount64, c.opts.initialVisibilityTimeout, c.opts.maxVisibilityTimeout, c.opts.backoffFactor)
-	return c.ChangeMessageVisibility(queueName, message, timeout)
+	return c.awsSQSClient.changeMessageVisibility(queueName, message, timeout)
 }
 
 // DeleteMessage removes a message from the queue.
 func (c *Client) DeleteMessage(queueName string, receiptHandle *string) error {
-	queueURL, err := c.getQueueURL(&queueName)
-	if err != nil {
-		return err
-	}
-
-	dmi := &sqs.DeleteMessageInput{
-		QueueUrl:      queueURL,
-		ReceiptHandle: receiptHandle,
-	}
-
-	_, err = c.awsSqs.DeleteMessage(dmi)
-	return err
-}
-
-func (c *Client) getQueueURL(queueName *string) (*string, error) {
-	output, err := c.awsSqs.GetQueueUrl(&sqs.GetQueueUrlInput{QueueName: queueName})
-	return output.QueueUrl, err
-}
-
-func getMessageSize(payload string, attributes map[string]*sqs.MessageAttributeValue) int {
-	size := len(payload)
-
-	for key, value := range attributes {
-		size += len(key) + len(*value.DataType) + len(*value.StringValue)
-	}
-
-	return size
+	return c.awsSQSClient.deleteMessage(queueName, receiptHandle)
 }
 
 // ExponentialBackoff can be configured on a client to achieve an exponential backoff strategy based on how many times the
@@ -262,7 +191,7 @@ func ExponentialBackoff(retryCount, minBackoff, maxBackof, backoffFactor int64) 
 	return min(expTimeout, maxBackof)
 }
 
-// LinearBackoff can be configured on a Client to achieve a linear backoff strategy based on how many times a message is received.
+// LinearBackoff can be configured on a awsSQSClient to achieve a linear backoff strategy based on how many times a message is received.
 func LinearBackoff(retryCount, minBackoff, maxBackof, backoffFactor int64) int64 {
 	return min(minBackoff+(retryCount-1)*backoffFactor, maxBackof)
 }

@@ -5,7 +5,6 @@ package integration
 import (
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/aws/credentials"
-	"github.com/aws/aws-sdk-go/aws/session"
 	"github.com/aws/aws-sdk-go/service/sqs"
 	"github.com/google/uuid"
 	"github.com/larwef/kitsune"
@@ -24,19 +23,16 @@ func getClient(t *testing.T) *kitsune.Client {
 		Credentials: credentials.NewSharedCredentials("", profile),
 	}
 
-	awsSession, err := session.NewSession(&config)
-	if err != nil {
-		t.Fatalf("Error getting AWS awsSession: %v ", err)
-	}
-
-	awsSqs := sqs.New(awsSession)
-
 	options := []kitsune.ClientOption{
 		kitsune.InitialVisibilityTimeout(5),
 		kitsune.MaxVisibilityTimeout(10),
+		kitsune.MessageAttributeNames("attribute1", "attribute2", "attribute111"),
 	}
 
-	return kitsune.NewClient(awsSqs, options...)
+	client, err := kitsune.NewClient(&config, options...)
+	test.AssertNotError(t, err)
+
+	return client
 }
 
 // These tests need an empty queue to run
@@ -63,6 +59,49 @@ func TestClient_SendReceiveAndDeleteSingleMessage(t *testing.T) {
 	if *messages[0].Body != payload {
 		t.Fatalf("Expected: %s. Actual: %s", payload, *messages[0].Body)
 	}
+
+	// Delete message
+	err = sqsClient.DeleteMessage(testQueueName, messages[0].ReceiptHandle)
+	if err != nil {
+		t.Fatalf("Error deleting message from SQS queue: %v", err)
+	}
+
+	t.Logf("Message with recept: %s deleted from SQS Queue", *messages[0].ReceiptHandle)
+}
+
+func TestClient_SendReceiveAndDeleteSingleMessageWithAttributes(t *testing.T) {
+	sqsClient := getClient(t)
+
+	payload := uuid.New().String()
+
+	attributes := make(map[string]*sqs.MessageAttributeValue)
+
+	attributes["attribute1"] = &sqs.MessageAttributeValue{DataType: aws.String("String"), StringValue: aws.String("TestAttribute1")}
+	attributes["attribute2"] = &sqs.MessageAttributeValue{DataType: aws.String("String"), StringValue: aws.String("TestAttribute2")}
+	attributes["attribute3"] = &sqs.MessageAttributeValue{DataType: aws.String("String"), StringValue: aws.String("TestAttribute3")}
+
+	// Send message
+	if err := sqsClient.SendMessageWithAttributes(testQueueName, payload, attributes); err != nil {
+		t.Fatalf("Error sending message to SQS: %v ", err)
+	}
+	t.Logf("Sent message to queue: %s with Payload:\n%s", testQueueName, payload)
+
+	// Receive message
+	messages, err := sqsClient.ReceiveMessage(testQueueName)
+	if err != nil {
+		t.Fatalf("Error receiving message from SQS: %v ", err)
+	}
+
+	t.Logf("Received message from SQS queue: %s with payload:\n%s", testQueueName, *messages[0].Body)
+
+	if *messages[0].Body != payload {
+		t.Fatalf("Expected: %s. Actual: %s", payload, *messages[0].Body)
+	}
+
+	test.AssertEqual(t, *messages[0].MessageAttributes["attribute1"].StringValue, "TestAttribute1")
+	test.AssertEqual(t, *messages[0].MessageAttributes["attribute2"].StringValue, "TestAttribute2")
+	_, exists := messages[0].MessageAttributes["attribute3"]
+	test.AssertEqual(t, exists, false)
 
 	// Delete message
 	err = sqsClient.DeleteMessage(testQueueName, messages[0].ReceiptHandle)
