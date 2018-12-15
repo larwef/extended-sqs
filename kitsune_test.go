@@ -10,9 +10,6 @@ import (
 	"testing"
 )
 
-// Currently this is testing the mock just as much as the awsSQSClient, but since the mock is made to be used by other packages needing
-// to mock the client for testing these tests might be useful. See the integration tests for more proper tests of the awsSQSClient.
-
 func TestClient_SendMessage(t *testing.T) {
 	for i := 1; i <= 100; i++ {
 		sendNMessages(t, i)
@@ -97,6 +94,10 @@ func TestClient_SendMessageWithAttributes_OverMaxSizeS3NotConfigured(t *testing.
 	err = sqsClient.SendMessageWithAttributes("test-queue", string(payload), attributes)
 	test.AssertIsError(t, err)
 	test.AssertEqual(t, err, ErrorMaxMessageSizeExceeded)
+}
+
+func TestClient_SendMessage_OverMaxSize(t *testing.T) {
+
 }
 
 func TestClient_SendMessageWithAttributes_MaxNoOfAttributesExceeded(t *testing.T) {

@@ -16,8 +16,9 @@ import (
 var awsRegion = "eu-west-1"
 var profile = "sqs_test_user"
 var testQueueName = "sqs-client-test-queue"
+var testBucket = "sqs-client-test-bucket"
 
-func getClient(t *testing.T) *kitsune.Client {
+func getClient(t *testing.T, opts ...kitsune.ClientOption) *kitsune.Client {
 	config := aws.Config{
 		Region:      &awsRegion,
 		Credentials: credentials.NewSharedCredentials("", profile),
@@ -26,10 +27,11 @@ func getClient(t *testing.T) *kitsune.Client {
 	options := []kitsune.ClientOption{
 		kitsune.InitialVisibilityTimeout(5),
 		kitsune.MaxVisibilityTimeout(10),
-		kitsune.MessageAttributeNames("attribute1", "attribute2", "attribute111"),
 	}
 
-	client, err := kitsune.NewClient(&config, options...)
+	options = append(options, opts...)
+
+	client, err := kitsune.New(&config, options...)
 	test.AssertNotError(t, err)
 
 	return client
@@ -70,7 +72,7 @@ func TestClient_SendReceiveAndDeleteSingleMessage(t *testing.T) {
 }
 
 func TestClient_SendReceiveAndDeleteSingleMessageWithAttributes(t *testing.T) {
-	sqsClient := getClient(t)
+	sqsClient := getClient(t, kitsune.MessageAttributeNames("attribute1", "attribute2", "attribute111"))
 
 	payload := uuid.New().String()
 
@@ -170,7 +172,7 @@ func TestClient_ExtendVisibilityTimeout(t *testing.T) {
 }
 
 func TestClient_SendReceiveAndDeleteLargeMessage(t *testing.T) {
-	sqsClient := getClient(t)
+	sqsClient := getClient(t, kitsune.S3Bucket(testBucket))
 
 	payload, err := ioutil.ReadFile("../testdata/size262145Bytes.txt")
 	test.AssertNotError(t, err)
@@ -205,7 +207,7 @@ func TestClient_SendReceiveAndDeleteLargeMessage(t *testing.T) {
 }
 
 func TestClient_SendReceiveAndDeleteLargeMessageWithAttributes(t *testing.T) {
-	sqsClient := getClient(t)
+	sqsClient := getClient(t, kitsune.S3Bucket(testBucket))
 
 	payload, err := ioutil.ReadFile("../testdata/size262080Bytes.txt")
 	test.AssertNotError(t, err)
