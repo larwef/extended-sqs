@@ -1,9 +1,10 @@
 # Kitsune
 Go client for AWS SQS.
 
-Planned features:
+## Planned features:
 - [x] Support large payloads by using S3
 - [ ] Encrypt with KMS
+    - [ ] Cache KMS key
 
 
 ## Policy suggestion

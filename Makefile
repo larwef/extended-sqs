@@ -1,3 +1,5 @@
+all: test
+
 # PHONY used to mitigate conflict with dir name test
 .PHONY: test
 test:
@@ -8,7 +10,13 @@ test:
 	go test ./...
 
 integration:
+	$(info INFO: Running integration tests. This may take some time.)
 	go test ./... -tags=integration
+
+coverage:
+	go test ./... -coverprofile=coverage.out
+	go tool cover -func=coverage.out
+	go tool cover -html=coverage.out
 
 doc:
 	godoc -http=":6060"
