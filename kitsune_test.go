@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"github.com/aws/aws-sdk-go/aws"
+	"github.com/aws/aws-sdk-go/service/kms/kmsiface"
 	"github.com/aws/aws-sdk-go/service/s3"
 	"github.com/aws/aws-sdk-go/service/s3/s3iface"
 	"github.com/aws/aws-sdk-go/service/sqs"
@@ -20,7 +21,7 @@ func TestClient_SendMessage(t *testing.T) {
 	}
 }
 
-func getClient(awsSQS sqsiface.SQSAPI, awsS3 s3iface.S3API, opt ...ClientOption) *Client {
+func getClient(awsSQS sqsiface.SQSAPI, awsS3 s3iface.S3API, awsKMS kmsiface.KMSAPI, opt ...ClientOption) *Client {
 
 	opts := defaultClientOptions
 	for _, o := range opt {
@@ -30,13 +31,14 @@ func getClient(awsSQS sqsiface.SQSAPI, awsS3 s3iface.S3API, opt ...ClientOption)
 	return &Client{
 		awsSQSClient: &sqsClient{awsSQS: awsSQS, opts: &opts},
 		awsS3Client:  &s3Client{awsS3: awsS3},
+		awsKMSClient: &kmsClient{awsKMS: awsKMS, opts: &opts},
 		opts:         opts,
 	}
 }
 
 func sendNMessages(t *testing.T, n int) {
 	sqsMock := test.NewSQSMock(5, int64(n+10))
-	sqsClient := getClient(sqsMock, nil)
+	sqsClient := getClient(sqsMock, nil, nil)
 
 	sqsMock.CreateQueueIfNotExists("test-queue")
 
@@ -55,7 +57,7 @@ func sendNMessages(t *testing.T, n int) {
 
 func TestClient_SendMessage_MaxSize(t *testing.T) {
 	sqsMock := test.NewSQSMock(5, int64(10))
-	sqsClient := getClient(sqsMock, nil)
+	sqsClient := getClient(sqsMock, nil, nil)
 
 	payload, err := ioutil.ReadFile("test/testdata/size262144Bytes.txt")
 	test.AssertNotError(t, err)
@@ -71,7 +73,7 @@ func TestClient_SendMessage_MaxSize(t *testing.T) {
 
 func TestClient_SendMessageWithAttributes_MaxSize(t *testing.T) {
 	sqsMock := test.NewSQSMock(5, int64(10))
-	sqsClient := getClient(sqsMock, nil)
+	sqsClient := getClient(sqsMock, nil, nil)
 
 	payload, err := ioutil.ReadFile("test/testdata/size262080Bytes.txt")
 	test.AssertNotError(t, err)
@@ -94,7 +96,7 @@ func TestClient_SendMessageWithAttributes_MaxSize(t *testing.T) {
 
 func TestClient_SendMessage_OverMaxSizeS3NotConfigured(t *testing.T) {
 	sqsMock := test.NewSQSMock(5, int64(10))
-	sqsClient := getClient(sqsMock, nil)
+	sqsClient := getClient(sqsMock, nil, nil)
 
 	payload, err := ioutil.ReadFile("test/testdata/size262145Bytes.txt")
 	test.AssertNotError(t, err)
@@ -108,7 +110,7 @@ func TestClient_SendMessage_OverMaxSizeS3NotConfigured(t *testing.T) {
 
 func TestClient_SendMessageWithAttributes_OverMaxSizeS3NotConfigured(t *testing.T) {
 	sqsMock := test.NewSQSMock(5, int64(10))
-	sqsClient := getClient(sqsMock, nil)
+	sqsClient := getClient(sqsMock, nil, nil)
 
 	payload, err := ioutil.ReadFile("test/testdata/size262080Bytes.txt")
 	test.AssertNotError(t, err)
@@ -142,7 +144,7 @@ func TestClient_SendMessage_OverMaxSize(t *testing.T) {
 		return &s3.PutObjectOutput{}, nil
 	}
 
-	sqsClient := getClient(sqsMock, s3Mock, S3Bucket("test-bucket"))
+	sqsClient := getClient(sqsMock, s3Mock, nil, S3Bucket("test-bucket"))
 	sqsMock.CreateQueueIfNotExists("test-queue")
 
 	err = sqsClient.SendMessage("test-queue", string(payload))
@@ -177,7 +179,7 @@ func TestClient_SendMessageWithAttributes_OverMaxSize(t *testing.T) {
 	}
 
 	// Get client with SQS mock and S3 mock.
-	sqsClient := getClient(sqsMock, s3Mock, S3Bucket("test-bucket"))
+	sqsClient := getClient(sqsMock, s3Mock, nil, S3Bucket("test-bucket"))
 	sqsMock.CreateQueueIfNotExists("test-queue")
 
 	attributes := make(map[string]*sqs.MessageAttributeValue)
@@ -205,7 +207,7 @@ func TestClient_SendMessageWithAttributes_OverMaxSize(t *testing.T) {
 
 func TestClient_SendMessageWithAttributes_MaxNoOfAttributesExceeded(t *testing.T) {
 	sqsMock := test.NewSQSMock(5, int64(10))
-	sqsClient := getClient(sqsMock, nil)
+	sqsClient := getClient(sqsMock, nil, nil)
 
 	payload := "TestPayload"
 
@@ -238,7 +240,7 @@ func TestClient_ReceiveMessage(t *testing.T) {
 
 func receiveNMessages(t *testing.T, n int) {
 	sqsMock := test.NewSQSMock(5, int64(n+10))
-	sqsClient := getClient(sqsMock, nil)
+	sqsClient := getClient(sqsMock, nil, nil)
 
 	sqsMock.CreateQueueIfNotExists("test-queue")
 
@@ -285,7 +287,7 @@ func TestClient_ReceiveMessage_FileEvent(t *testing.T) {
 	}
 
 	// Get client with SQS mock and S3 mock.
-	sqsClient := getClient(sqsMock, s3Mock, S3Bucket("test-bucket"))
+	sqsClient := getClient(sqsMock, s3Mock, nil, S3Bucket("test-bucket"))
 	sqsMock.CreateQueueIfNotExists("test-queue")
 
 	// Create and marshal fileEvent and put the file event on the SQS mock.
@@ -316,4 +318,63 @@ func TestClient_ReceiveMessage_FileEvent(t *testing.T) {
 	messages, err := sqsClient.ReceiveMessage("test-queue")
 	test.AssertNotError(t, err)
 	test.AssertEqual(t, *messages[0].Body, string(payload))
+}
+
+func TestClient_SendMessage_KMS(t *testing.T) {
+	sqsMock := test.NewSQSMock(5, int64(10))
+	kmsMock := &test.KmsMock{}
+	sqsClient := getClient(sqsMock, nil, kmsMock, KMSKeyID("keyID"))
+
+	sqsMock.CreateQueueIfNotExists("test-queue")
+
+	err := sqsClient.SendMessage("test-queue", "TestPayload")
+	test.AssertNotError(t, err)
+
+	message, err := sqsMock.WaitUntilMessagesReceived("test-queue", 1)
+	test.AssertNotError(t, err)
+
+	test.AssertEqual(t, kmsMock.GenerateDataKeyCalledCount, 1)
+
+	var ee encryptedEvent
+	err = json.Unmarshal([]byte(*message[0].Body), &ee)
+
+	data, err := test.DecryptData(ee.Payload)
+	test.AssertNotError(t, err)
+
+	test.AssertEqual(t, string(data), "TestPayload")
+}
+
+func TestClient_ReceiveMessage_KMS(t *testing.T) {
+	sqsMock := test.NewSQSMock(5, int64(10))
+	kmsMock := &test.KmsMock{}
+
+	sqsClient := getClient(sqsMock, nil, kmsMock, KMSKeyID("keyID"))
+	sqsMock.CreateQueueIfNotExists("test-queue")
+
+	ee := encryptedEvent{
+		EncryptedEncryptionKey: []byte{1, 2, 3, 0, 120, 117, 254, 40, 232, 55, 217, 84, 174, 75, 59, 2, 126, 80, 228, 40, 30, 154, 9, 181, 250, 93, 124, 148, 204, 162, 114, 168, 221, 48, 205, 156, 51, 1, 175, 64, 33, 234, 59, 118, 135, 116, 69, 35, 55, 119, 205, 97, 34, 121, 0, 0, 0, 126, 48, 124, 6, 9, 42, 134, 72, 134, 247, 13, 1, 7, 6, 160, 111, 48, 109, 2, 1, 0, 48, 104, 6, 9, 42, 134, 72, 134, 247, 13, 1, 7, 1, 48, 30, 6, 9, 96, 134, 72, 1, 101, 3, 4, 1, 46, 48, 17, 4, 12, 206, 50, 137, 217, 81, 233, 59, 171, 93, 91, 58, 132, 2, 1, 16, 128, 59, 113, 1, 196, 78, 149, 34, 228, 82, 195, 190, 192, 248, 95, 192, 11, 108, 200, 117, 57, 165, 152, 54, 95, 169, 176, 53, 71, 217, 119, 34, 10, 26, 143, 240, 124, 202, 53, 167, 94, 151, 240, 14, 124, 48, 154, 153, 11, 46, 189, 202, 163, 21, 232, 230, 10, 202, 105, 98, 175},
+		KeyID:                  "KeyID",
+		Payload:                []byte{102, 205, 159, 72, 200, 107, 205, 104, 53, 185, 73, 108, 171, 58, 12, 177, 114, 113, 72, 157, 2, 234, 89, 248, 169, 25, 247, 54, 249, 249, 189, 35, 226, 248, 252, 167, 110, 245, 127},
+	}
+
+	eebytes, err := json.Marshal(ee)
+	test.AssertNotError(t, err)
+
+	messageAttributes := make(map[string]*sqs.MessageAttributeValue)
+	messageAttributes[AttributeNameKMSKey] = &sqs.MessageAttributeValue{
+		DataType:    aws.String("String"),
+		StringValue: aws.String("keyID"),
+	}
+
+	sendMessageInput := &sqs.SendMessageInput{
+		MessageBody:       aws.String(string(eebytes)),
+		QueueUrl:          aws.String("test-queue"),
+		MessageAttributes: messageAttributes,
+	}
+	_, err = sqsMock.SendMessage(sendMessageInput)
+	test.AssertNotError(t, err)
+
+	messages, err := sqsClient.ReceiveMessage("test-queue")
+	test.AssertNotError(t, err)
+	test.AssertEqual(t, *messages[0].Body, "TestPayload")
 }

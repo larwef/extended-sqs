@@ -15,8 +15,10 @@ import (
 
 var awsRegion = "eu-west-1"
 var profile = "sqs_test_user"
+
 var testQueueName = "sqs-client-test-queue"
 var testBucket = "sqs-client-test-bucket"
+var testKMSKey = "alias/sqs-client-test-key"
 
 func getClient(t *testing.T, opts ...kitsune.ClientOption) *kitsune.Client {
 	config := aws.Config{
@@ -221,6 +223,73 @@ func TestClient_SendReceiveAndDeleteLargeMessageWithAttributes(t *testing.T) {
 
 	// Send message
 	if err := sqsClient.SendMessageWithAttributes(testQueueName, string(payload), attributes); err != nil {
+		t.Fatalf("Error sending message to SQS: %v ", err)
+	}
+	t.Logf("Sent message to queue: %s.\n", testQueueName)
+
+	// Receive message
+	messages, err := sqsClient.ReceiveMessage(testQueueName)
+	if err != nil {
+		t.Fatalf("Error receiving message from SQS: %v ", err)
+	}
+
+	t.Logf("Received message from SQS queue: %s.\n", testQueueName)
+
+	if *messages[0].Body != string(payload) {
+		t.Fatalf("Expected: %s. Actual: %s", payload, *messages[0].Body)
+	}
+
+	// Delete message
+	err = sqsClient.DeleteMessage(testQueueName, messages[0].ReceiptHandle)
+	if err != nil {
+		t.Fatalf("Error deleting message from SQS queue: %v", err)
+	}
+
+	t.Logf("Message with recept: %s deleted from SQS Queue", *messages[0].ReceiptHandle)
+
+	t.Logf("Payload:\n%s", *messages[0].Body)
+}
+
+func TestClient_SendReceiveAndDeleteSingleMessage_KMS(t *testing.T) {
+	sqsClient := getClient(t, kitsune.KMSKeyID(testKMSKey))
+
+	payload := uuid.New().String()
+
+	// Send message
+	if err := sqsClient.SendMessage(testQueueName, payload); err != nil {
+		t.Fatalf("Error sending message to SQS: %v ", err)
+	}
+	t.Logf("Sent message to queue: %s with Payload:\n%s", testQueueName, payload)
+
+	// Receive message
+	messages, err := sqsClient.ReceiveMessage(testQueueName)
+	if err != nil {
+		t.Fatalf("Error receiving message from SQS: %v ", err)
+	}
+
+	t.Logf("Received message from SQS queue: %s with payload:\n%s", testQueueName, *messages[0].Body)
+
+	if *messages[0].Body != payload {
+		t.Fatalf("Expected: %s. Actual: %s", payload, *messages[0].Body)
+	}
+
+	// Delete message
+	err = sqsClient.DeleteMessage(testQueueName, messages[0].ReceiptHandle)
+	if err != nil {
+		t.Fatalf("Error deleting message from SQS queue: %v", err)
+	}
+
+	t.Logf("Message with recept: %s deleted from SQS Queue", *messages[0].ReceiptHandle)
+}
+
+func TestClient_SendReceiveAndDeleteLargeMessage_S3AndKMS(t *testing.T) {
+	sqsClient := getClient(t, kitsune.S3Bucket(testBucket), kitsune.KMSKeyID(testKMSKey))
+
+	payload, err := ioutil.ReadFile("../testdata/size262145Bytes.txt")
+	test.AssertNotError(t, err)
+
+	// Send message
+	if err := sqsClient.SendMessage(testQueueName, string(payload)); err != nil {
 		t.Fatalf("Error sending message to SQS: %v ", err)
 	}
 	t.Logf("Sent message to queue: %s.\n", testQueueName)

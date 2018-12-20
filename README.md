@@ -3,7 +3,7 @@ Go client for AWS SQS.
 
 ## Planned features:
 - [x] Support large payloads by using S3
-- [ ] Encrypt with KMS
+- [x] Encrypt with KMS
     - [ ] Cache KMS key
 
 
@@ -22,7 +22,7 @@ Go client for AWS SQS.
                 "sqs:DeleteMessage",
                 "sqs:GetQueueUrl"
             ],
-            "Resource": "<queue ARN>"
+            "Resource": "<SQS arn>"
         },
         {
             "Sid": "s3Permissions",
@@ -31,7 +31,16 @@ Go client for AWS SQS.
                 "s3:GetObject",
                 "s3:PutObject"
             ],
-            "Resource": "<bucket ARN>*"
+            "Resource": "<S3 Bucket arn>*"
+        },
+        {
+            "Sid": "kmsPermissions",
+            "Effect": "Allow",
+            "Action": [
+                "kms:GenerateDataKey",
+                "kms:Decrypt"
+            ],
+            "Resource": "<KMS Key arn>"
         }
     ]
 }

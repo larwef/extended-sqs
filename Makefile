@@ -10,7 +10,7 @@ test:
 	go test ./...
 
 integration:
-	$(info INFO: Running integration tests. This may take some time.)
+	$(info INFO: Running all tests including integration tests. This may take some time.)
 	go test ./... -tags=integration
 
 coverage:

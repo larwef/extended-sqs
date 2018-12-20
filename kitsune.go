@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/aws/session"
+	"github.com/aws/aws-sdk-go/service/kms"
 	"github.com/aws/aws-sdk-go/service/s3"
 	"github.com/aws/aws-sdk-go/service/sqs"
 	"github.com/google/uuid"
@@ -17,6 +18,9 @@ const (
 	// AttributeNameS3Bucket is an attribute name used by sender to pass the location of messages put on S3 to the receiver.
 	// Receiver uses this attribute if set to fetch a message from S3.
 	AttributeNameS3Bucket = "payloadBucket"
+
+	// AttributeNameKMSKey used to pass the KMS key used to encrypt the data key.
+	AttributeNameKMSKey = "kmsKey"
 )
 
 // Client object handles communication with SQS
@@ -27,6 +31,7 @@ type Client struct {
 
 	awsSQSClient *sqsClient
 	awsS3Client  *s3Client
+	awsKMSClient *kmsClient
 }
 
 type options struct {
@@ -41,6 +46,7 @@ type options struct {
 	messageAttributeNames    []*string
 	s3Bucket                 string
 	forceS3                  bool
+	kmsKeyID                 string
 }
 
 var defaultClientOptions = options{
@@ -51,7 +57,7 @@ var defaultClientOptions = options{
 	maxVisibilityTimeout:     900,
 	waitTimeSeconds:          20,
 	attributeNames:           []*string{aws.String("ApproximateReceiveCount")},
-	messageAttributeNames:    []*string{aws.String(AttributeNameS3Bucket)},
+	messageAttributeNames:    []*string{aws.String(AttributeNameS3Bucket), aws.String(AttributeNameKMSKey)},
 	forceS3:                  false,
 }
 
@@ -125,6 +131,11 @@ func ForceS3(b bool) ClientOption {
 	return func(o *options) { o.forceS3 = b }
 }
 
+// KMSKeyID sets the KMS key to be used for encryption
+func KMSKeyID(s string) ClientOption {
+	return func(o *options) { o.kmsKeyID = s }
+}
+
 // New returns a new awsSQSClient with configuration set as defined by the ClientOptions. Will create a s3Client from the
 // aws.Config if a bucket is set.
 func New(awsConfig *aws.Config, opt ...ClientOption) (*Client, error) {
@@ -138,22 +149,31 @@ func New(awsConfig *aws.Config, opt ...ClientOption) (*Client, error) {
 		o(&opts)
 	}
 
-	sqsc := sqsClient{
+	sqsc := &sqsClient{
 		opts:   &opts,
 		awsSQS: sqs.New(awsSession),
 	}
 
-	var s3c s3Client
+	var s3c *s3Client
 	if opts.s3Bucket != "" {
-		s3c = s3Client{
+		s3c = &s3Client{
 			awsS3: s3.New(awsSession),
+		}
+	}
+
+	var kmsc *kmsClient
+	if opts.kmsKeyID != "" {
+		kmsc = &kmsClient{
+			opts:   &opts,
+			awsKMS: kms.New(awsSession),
 		}
 	}
 
 	return &Client{
 		opts:         opts,
-		awsSQSClient: &sqsc,
-		awsS3Client:  &s3c,
+		awsSQSClient: sqsc,
+		awsS3Client:  s3c,
+		awsKMSClient: kmsc,
 	}, nil
 }
 
@@ -169,6 +189,22 @@ func (c *Client) SendMessage(queueName string, payload string) error {
 // message was uploaded if put on the message attributes. This means an no of attributes error can be thrown even though this
 // function is called with less than maximum number of attributes.
 func (c *Client) SendMessageWithAttributes(queueName string, payload string, messageAttributes map[string]*sqs.MessageAttributeValue) error {
+	// Encrypt the payload if a KMS key is configured
+	if c.opts.kmsKeyID != "" {
+		var err error
+		encryptedPayload, err := c.awsKMSClient.Encrypt([]byte(payload))
+		if err != nil {
+			return err
+		}
+
+		if messageAttributes == nil {
+			messageAttributes = make(map[string]*sqs.MessageAttributeValue)
+		}
+		messageAttributes[AttributeNameKMSKey] = &sqs.MessageAttributeValue{DataType: aws.String("String"), StringValue: &c.opts.kmsKeyID}
+		payload = string(encryptedPayload)
+	}
+
+	// Put payload to S3 if S3 is forced of message is larger than max size. Bucket needs to be configured.
 	if (c.opts.forceS3 || getMessageSize(payload, messageAttributes) > maxMessageSize) && c.opts.s3Bucket != "" {
 		key := uuid.New().String()
 		if err := c.awsS3Client.putObject(c.opts.s3Bucket, key, payload); err != nil {
@@ -202,17 +238,30 @@ func (c *Client) ReceiveMessage(queueName string) ([]*sqs.Message, error) {
 	messages, err := c.awsSQSClient.receiveMessage(queueName)
 
 	for _, message := range messages {
+		// If S3 bucket is included the payload is located in S3 an needs to be fetched
 		if val, exists := message.MessageAttributes[AttributeNameS3Bucket]; exists {
 			var fe fileEvent
 			if err := json.Unmarshal([]byte(*message.Body), &fe); err != nil {
 				return nil, err
 			}
+
 			if payload, err := c.awsS3Client.getObject(*val.StringValue, fe.Filename); err == nil {
 				message.Body = &payload
 				delete(message.MessageAttributes, AttributeNameS3Bucket)
 			} else {
 				return nil, err
 			}
+		}
+
+		// If KMS key is included the payload is encrypted and needs to be decrypted
+		if _, exists := message.MessageAttributes[AttributeNameKMSKey]; exists {
+			decrypted, err := c.awsKMSClient.Decrypt([]byte(*message.Body))
+			if err != nil {
+				return nil, err
+			}
+			decryptedStr := string(decrypted)
+			message.Body = &decryptedStr
+			delete(message.MessageAttributes, AttributeNameKMSKey)
 		}
 	}
 
