@@ -240,7 +240,7 @@ func (c *Client) ReceiveMessage(queueName *string) ([]*sqs.Message, error) {
 	// Loop through messages and check if payload is located in S3 and/or if its encrypted.
 	for _, message := range messages {
 		// If S3 bucket is included the payload is located in S3 an needs to be fetched
-		if _, exists := message.MessageAttributes[AttributeNameS3Bucket]; exists {
+		if _, exists := message.MessageAttributes[AttributeNameS3Bucket]; exists && c.awsS3Client != nil {
 			var fe fileEvent
 			if err := json.Unmarshal([]byte(*message.Body), &fe); err != nil {
 				return nil, err
@@ -255,7 +255,7 @@ func (c *Client) ReceiveMessage(queueName *string) ([]*sqs.Message, error) {
 		}
 
 		// If KMS key is included the payload is encrypted and needs to be decrypted
-		if _, exists := message.MessageAttributes[AttributeNameKMSKey]; exists {
+		if _, exists := message.MessageAttributes[AttributeNameKMSKey]; exists && c.awsKMSClient != nil {
 			var ee encryptedEvent
 			if err := json.Unmarshal([]byte(*message.Body), &ee); err != nil {
 				return nil, err
