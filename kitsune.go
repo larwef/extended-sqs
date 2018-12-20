@@ -9,7 +9,6 @@ import (
 	"github.com/aws/aws-sdk-go/service/kms"
 	"github.com/aws/aws-sdk-go/service/s3"
 	"github.com/aws/aws-sdk-go/service/sqs"
-	"github.com/google/uuid"
 	"math"
 	"strconv"
 )
@@ -19,7 +18,7 @@ const (
 	// Receiver uses this attribute if set to fetch a message from S3.
 	AttributeNameS3Bucket = "payloadBucket"
 
-	// AttributeNameKMSKey used to pass the KMS key used to encrypt the data key.
+	// AttributeNameKMSKey used to pass the KMS key used to encryptData the data key.
 	AttributeNameKMSKey = "kmsKey"
 )
 
@@ -164,7 +163,6 @@ func New(awsConfig *aws.Config, opt ...ClientOption) (*Client, error) {
 	var kmsc *kmsClient
 	if opts.kmsKeyID != "" {
 		kmsc = &kmsClient{
-			opts:   &opts,
 			awsKMS: kms.New(awsSession),
 		}
 	}
@@ -180,7 +178,7 @@ func New(awsConfig *aws.Config, opt ...ClientOption) (*Client, error) {
 // SendMessage sends a message to the specified queue. Convenient method for sending a message without custom attributes. This
 // does not guarantee there will be no attributes on the message to SQS. The client might add attributes eg. for file events when
 // the payload is uploaded to S3.
-func (c *Client) SendMessage(queueName string, payload string) error {
+func (c *Client) SendMessage(queueName *string, payload string) error {
 	return c.SendMessageWithAttributes(queueName, payload, nil)
 }
 
@@ -188,11 +186,15 @@ func (c *Client) SendMessage(queueName string, payload string) error {
 // payload will be uploaded to the configured S3 bucket and a file event will be sent on the SQS queue. The bucket where the
 // message was uploaded if put on the message attributes. This means an no of attributes error can be thrown even though this
 // function is called with less than maximum number of attributes.
-func (c *Client) SendMessageWithAttributes(queueName string, payload string, messageAttributes map[string]*sqs.MessageAttributeValue) error {
+func (c *Client) SendMessageWithAttributes(queueName *string, payload string, messageAttributes map[string]*sqs.MessageAttributeValue) error {
 	// Encrypt the payload if a KMS key is configured
 	if c.opts.kmsKeyID != "" {
-		var err error
-		encryptedPayload, err := c.awsKMSClient.Encrypt([]byte(payload))
+		encryptedEvent, err := c.awsKMSClient.encrypt(&c.opts.kmsKeyID, []byte(payload))
+		if err != nil {
+			return fmt.Errorf("error encrypting payload: %v", err)
+		}
+
+		encryptedEventBytes, err := json.Marshal(encryptedEvent)
 		if err != nil {
 			return err
 		}
@@ -200,23 +202,19 @@ func (c *Client) SendMessageWithAttributes(queueName string, payload string, mes
 		if messageAttributes == nil {
 			messageAttributes = make(map[string]*sqs.MessageAttributeValue)
 		}
+
 		messageAttributes[AttributeNameKMSKey] = &sqs.MessageAttributeValue{DataType: aws.String("String"), StringValue: &c.opts.kmsKeyID}
-		payload = string(encryptedPayload)
+		payload = string(encryptedEventBytes)
 	}
 
 	// Put payload to S3 if S3 is forced of message is larger than max size. Bucket needs to be configured.
 	if (c.opts.forceS3 || getMessageSize(payload, messageAttributes) > maxMessageSize) && c.opts.s3Bucket != "" {
-		key := uuid.New().String()
-		if err := c.awsS3Client.putObject(c.opts.s3Bucket, key, payload); err != nil {
+		fileEvent, err := c.awsS3Client.putObject(&c.opts.s3Bucket, &payload)
+		if err != nil {
 			return fmt.Errorf("error puting object to S3: %v", err)
 		}
 
-		fe := fileEvent{
-			Size:     int64(len(payload)),
-			Filename: key,
-		}
-
-		bytes, err := json.Marshal(&fe)
+		fileEventBytes, err := json.Marshal(&fileEvent)
 		if err != nil {
 			return err
 		}
@@ -224,28 +222,31 @@ func (c *Client) SendMessageWithAttributes(queueName string, payload string, mes
 		if messageAttributes == nil {
 			messageAttributes = make(map[string]*sqs.MessageAttributeValue)
 		}
+
 		messageAttributes[AttributeNameS3Bucket] = &sqs.MessageAttributeValue{DataType: aws.String("String"), StringValue: &c.opts.s3Bucket}
-		payload = string(bytes)
+		payload = string(fileEventBytes)
 	}
 
-	return c.awsSQSClient.sendMessage(queueName, payload, messageAttributes)
+	return c.awsSQSClient.sendMessage(queueName, &payload, messageAttributes)
 }
 
 // ReceiveMessage polls the specified queue and returns the fetched messages. If the S3 bucket attribute is set, the payload is
 // fetched and replaces the file event in the sqs.Message body. This will not delete the object in S3. A lifecycle rule is
 // recomended.
-func (c *Client) ReceiveMessage(queueName string) ([]*sqs.Message, error) {
+// TODO: Currently the function will return an error if one of the messages fail when fetching from S3 or when decrypting. Consider putting the failing messages back on the queue or handling them some other way.
+func (c *Client) ReceiveMessage(queueName *string) ([]*sqs.Message, error) {
 	messages, err := c.awsSQSClient.receiveMessage(queueName)
 
+	// Loop through messages and check if payload is located in S3 and/or if its encrypted.
 	for _, message := range messages {
 		// If S3 bucket is included the payload is located in S3 an needs to be fetched
-		if val, exists := message.MessageAttributes[AttributeNameS3Bucket]; exists {
+		if _, exists := message.MessageAttributes[AttributeNameS3Bucket]; exists {
 			var fe fileEvent
 			if err := json.Unmarshal([]byte(*message.Body), &fe); err != nil {
 				return nil, err
 			}
 
-			if payload, err := c.awsS3Client.getObject(*val.StringValue, fe.Filename); err == nil {
+			if payload, err := c.awsS3Client.getObject(&fe); err == nil {
 				message.Body = &payload
 				delete(message.MessageAttributes, AttributeNameS3Bucket)
 			} else {
@@ -255,13 +256,18 @@ func (c *Client) ReceiveMessage(queueName string) ([]*sqs.Message, error) {
 
 		// If KMS key is included the payload is encrypted and needs to be decrypted
 		if _, exists := message.MessageAttributes[AttributeNameKMSKey]; exists {
-			decrypted, err := c.awsKMSClient.Decrypt([]byte(*message.Body))
-			if err != nil {
+			var ee encryptedEvent
+			if err := json.Unmarshal([]byte(*message.Body), &ee); err != nil {
 				return nil, err
 			}
-			decryptedStr := string(decrypted)
-			message.Body = &decryptedStr
-			delete(message.MessageAttributes, AttributeNameKMSKey)
+
+			if decrypted, err := c.awsKMSClient.decrypt(&ee); err == nil {
+				decryptedStr := string(decrypted)
+				message.Body = &decryptedStr
+				delete(message.MessageAttributes, AttributeNameKMSKey)
+			} else {
+				return nil, err
+			}
 		}
 	}
 
@@ -270,13 +276,13 @@ func (c *Client) ReceiveMessage(queueName string) ([]*sqs.Message, error) {
 
 // ChangeMessageVisibility changes the visibilty of a message. Essentialy putting it back in the queue and unavailable for a
 // specified amount of time.
-func (c *Client) ChangeMessageVisibility(queueName string, message *sqs.Message, timeout int64) error {
+func (c *Client) ChangeMessageVisibility(queueName *string, message *sqs.Message, timeout int64) error {
 	return c.awsSQSClient.changeMessageVisibility(queueName, message, timeout)
 }
 
 // Backoff is used for changing message visibility based on a calculated amount of time determined by a back off function
 // configured on the awsSQSClient.
-func (c *Client) Backoff(queueName string, message *sqs.Message) error {
+func (c *Client) Backoff(queueName *string, message *sqs.Message) error {
 	receivedCount, err := strconv.Atoi(*message.Attributes["ApproximateReceiveCount"])
 	if err != nil {
 		return errors.New("error getting received count")
@@ -289,7 +295,7 @@ func (c *Client) Backoff(queueName string, message *sqs.Message) error {
 }
 
 // DeleteMessage removes a message from the queue.
-func (c *Client) DeleteMessage(queueName string, receiptHandle *string) error {
+func (c *Client) DeleteMessage(queueName *string, receiptHandle *string) error {
 	return c.awsSQSClient.deleteMessage(queueName, receiptHandle)
 }
 

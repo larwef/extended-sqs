@@ -4,21 +4,25 @@ import (
 	"crypto/aes"
 	"crypto/cipher"
 	"crypto/rand"
-	"encoding/json"
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/service/kms"
 	"github.com/aws/aws-sdk-go/service/kms/kmsiface"
 	"io"
 )
 
+type encryptedEvent struct {
+	EncryptedEncryptionKey []byte `json:"encryptedEncryptionKey"`
+	KeyID                  string `json:"keyId"`
+	Payload                []byte `json:"payload"`
+}
+
 type kmsClient struct {
-	opts   *options
 	awsKMS kmsiface.KMSAPI
 }
 
-func (k *kmsClient) Encrypt(payload []byte) ([]byte, error) {
+func (k *kmsClient) encrypt(keyID *string, payload []byte) (*encryptedEvent, error) {
 	gki := &kms.GenerateDataKeyInput{
-		KeyId:   aws.String("alias/sqs-client-test-key"),
+		KeyId:   keyID,
 		KeySpec: aws.String(kms.DataKeySpecAes256),
 	}
 
@@ -27,26 +31,18 @@ func (k *kmsClient) Encrypt(payload []byte) ([]byte, error) {
 		return nil, err
 	}
 
-	encryptedPayload, err := encrypt(payload, gko.Plaintext)
-	if err != nil {
-		return nil, err
-	}
+	encryptedPayload, err := encryptData(payload, gko.Plaintext)
 
-	encryptedEvent := encryptedEvent{
+	encryptedEvent := &encryptedEvent{
 		EncryptedEncryptionKey: gko.CiphertextBlob,
 		KeyID:                  *gko.KeyId,
 		Payload:                encryptedPayload,
 	}
 
-	return json.Marshal(encryptedEvent)
+	return encryptedEvent, err
 }
 
-func (k *kmsClient) Decrypt(payload []byte) ([]byte, error) {
-	var ee encryptedEvent
-	if err := json.Unmarshal(payload, &ee); err != nil {
-		return nil, err
-	}
-
+func (k *kmsClient) decrypt(ee *encryptedEvent) ([]byte, error) {
 	di := &kms.DecryptInput{
 		CiphertextBlob: ee.EncryptedEncryptionKey,
 	}
@@ -56,11 +52,11 @@ func (k *kmsClient) Decrypt(payload []byte) ([]byte, error) {
 		return nil, err
 	}
 
-	return decrypt(ee.Payload, do.Plaintext)
+	return decryptData(ee.Payload, do.Plaintext)
 
 }
 
-func encrypt(data []byte, key []byte) ([]byte, error) {
+func encryptData(data []byte, key []byte) ([]byte, error) {
 	block, err := aes.NewCipher(key)
 	if err != nil {
 		return nil, err
@@ -80,7 +76,7 @@ func encrypt(data []byte, key []byte) ([]byte, error) {
 	return ciphertext, nil
 }
 
-func decrypt(data []byte, key []byte) ([]byte, error) {
+func decryptData(data []byte, key []byte) ([]byte, error) {
 	block, err := aes.NewCipher(key)
 	if err != nil {
 		return nil, err

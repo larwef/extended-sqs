@@ -24,16 +24,16 @@ type sqsClient struct {
 	awsSQS sqsiface.SQSAPI
 }
 
-func (s *sqsClient) sendMessage(queueName string, payload string, attributes map[string]*sqs.MessageAttributeValue) error {
+func (s *sqsClient) sendMessage(queueName *string, payload *string, attributes map[string]*sqs.MessageAttributeValue) error {
 	if len(attributes) > maxNumberOfAttributes {
 		return ErrorMaxNumberOfAttributesExceeded
 	}
 
-	if getMessageSize(payload, attributes) > maxMessageSize {
+	if getMessageSize(*payload, attributes) > maxMessageSize {
 		return ErrorMaxMessageSizeExceeded
 	}
 
-	queueURL, err := s.getQueueURL(&queueName)
+	queueURL, err := s.getQueueURL(queueName)
 	if err != nil {
 		return err
 	}
@@ -41,7 +41,7 @@ func (s *sqsClient) sendMessage(queueName string, payload string, attributes map
 	smi := &sqs.SendMessageInput{
 		DelaySeconds:      &s.opts.delaySeconds,
 		MessageAttributes: attributes,
-		MessageBody:       &payload,
+		MessageBody:       payload,
 		QueueUrl:          queueURL,
 	}
 
@@ -49,8 +49,8 @@ func (s *sqsClient) sendMessage(queueName string, payload string, attributes map
 	return err
 }
 
-func (s *sqsClient) receiveMessage(queueName string) ([]*sqs.Message, error) {
-	queueURL, err := s.getQueueURL(&queueName)
+func (s *sqsClient) receiveMessage(queueName *string) ([]*sqs.Message, error) {
+	queueURL, err := s.getQueueURL(queueName)
 	if err != nil {
 		return nil, err
 	}
@@ -68,8 +68,8 @@ func (s *sqsClient) receiveMessage(queueName string) ([]*sqs.Message, error) {
 	return output.Messages, err
 }
 
-func (s *sqsClient) changeMessageVisibility(queueName string, message *sqs.Message, timeout int64) error {
-	queueURL, err := s.getQueueURL(&queueName)
+func (s *sqsClient) changeMessageVisibility(queueName *string, message *sqs.Message, timeout int64) error {
+	queueURL, err := s.getQueueURL(queueName)
 	if err != nil {
 		return err
 	}
@@ -84,8 +84,8 @@ func (s *sqsClient) changeMessageVisibility(queueName string, message *sqs.Messa
 	return err
 }
 
-func (s *sqsClient) deleteMessage(queueName string, receiptHandle *string) error {
-	queueURL, err := s.getQueueURL(&queueName)
+func (s *sqsClient) deleteMessage(queueName *string, receiptHandle *string) error {
+	queueURL, err := s.getQueueURL(queueName)
 	if err != nil {
 		return err
 	}

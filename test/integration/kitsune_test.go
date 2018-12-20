@@ -47,25 +47,25 @@ func TestClient_SendReceiveAndDeleteSingleMessage(t *testing.T) {
 	payload := uuid.New().String()
 
 	// Send message
-	if err := sqsClient.SendMessage(testQueueName, payload); err != nil {
+	if err := sqsClient.SendMessage(&testQueueName, payload); err != nil {
 		t.Fatalf("Error sending message to SQS: %v ", err)
 	}
 	t.Logf("Sent message to queue: %s with Payload:\n%s", testQueueName, payload)
 
 	// Receive message
-	messages, err := sqsClient.ReceiveMessage(testQueueName)
+	messages, err := sqsClient.ReceiveMessage(&testQueueName)
 	if err != nil {
 		t.Fatalf("Error receiving message from SQS: %v ", err)
 	}
 
-	t.Logf("Received message from SQS queue: %s with payload:\n%s", testQueueName, *messages[0].Body)
+	t.Logf("Received message from SQS queue: %s with ayload:\n%s", testQueueName, *messages[0].Body)
 
 	if *messages[0].Body != payload {
 		t.Fatalf("Expected: %s. Actual: %s", payload, *messages[0].Body)
 	}
 
 	// Delete message
-	err = sqsClient.DeleteMessage(testQueueName, messages[0].ReceiptHandle)
+	err = sqsClient.DeleteMessage(&testQueueName, messages[0].ReceiptHandle)
 	if err != nil {
 		t.Fatalf("Error deleting message from SQS queue: %v", err)
 	}
@@ -85,18 +85,18 @@ func TestClient_SendReceiveAndDeleteSingleMessageWithAttributes(t *testing.T) {
 	attributes["attribute3"] = &sqs.MessageAttributeValue{DataType: aws.String("String"), StringValue: aws.String("TestAttribute3")}
 
 	// Send message
-	if err := sqsClient.SendMessageWithAttributes(testQueueName, payload, attributes); err != nil {
+	if err := sqsClient.SendMessageWithAttributes(&testQueueName, payload, attributes); err != nil {
 		t.Fatalf("Error sending message to SQS: %v ", err)
 	}
 	t.Logf("Sent message to queue: %s with Payload:\n%s", testQueueName, payload)
 
 	// Receive message
-	messages, err := sqsClient.ReceiveMessage(testQueueName)
+	messages, err := sqsClient.ReceiveMessage(&testQueueName)
 	if err != nil {
 		t.Fatalf("Error receiving message from SQS: %v ", err)
 	}
 
-	t.Logf("Received message from SQS queue: %s with payload:\n%s", testQueueName, *messages[0].Body)
+	t.Logf("Received message from SQS queue: %s with ayload:\n%s", testQueueName, *messages[0].Body)
 
 	if *messages[0].Body != payload {
 		t.Fatalf("Expected: %s. Actual: %s", payload, *messages[0].Body)
@@ -108,7 +108,7 @@ func TestClient_SendReceiveAndDeleteSingleMessageWithAttributes(t *testing.T) {
 	test.AssertEqual(t, exists, false)
 
 	// Delete message
-	err = sqsClient.DeleteMessage(testQueueName, messages[0].ReceiptHandle)
+	err = sqsClient.DeleteMessage(&testQueueName, messages[0].ReceiptHandle)
 	if err != nil {
 		t.Fatalf("Error deleting message from SQS queue: %v", err)
 	}
@@ -122,18 +122,18 @@ func TestClient_ExtendVisibilityTimeout(t *testing.T) {
 	payload := uuid.New().String()
 
 	// Send message
-	if err := sqsClient.SendMessage(testQueueName, payload); err != nil {
+	if err := sqsClient.SendMessage(&testQueueName, payload); err != nil {
 		t.Fatalf("Error sending message to SQS: %v ", err)
 	}
 	t.Logf("Sent message to queue: %s with Payload:\n%s", testQueueName, payload)
 
 	// Receive message first time
-	messages, err := sqsClient.ReceiveMessage(testQueueName)
+	messages, err := sqsClient.ReceiveMessage(&testQueueName)
 	if err != nil {
 		t.Fatalf("Error receiving message from SQS: %v ", err)
 	}
 
-	t.Logf("Received message from SQS queue: %s with payload:\n%s", testQueueName, *messages[0].Body)
+	t.Logf("Received message from SQS queue: %s with ayload:\n%s", testQueueName, *messages[0].Body)
 
 	message := messages[0]
 	if *message.Body != payload {
@@ -144,19 +144,19 @@ func TestClient_ExtendVisibilityTimeout(t *testing.T) {
 	// Keep wait time to under 20s to make this work
 	var timeout int64 = 3
 	for n := 0; n < 3; n++ {
-		err = sqsClient.ChangeMessageVisibility(testQueueName, message, timeout)
+		err = sqsClient.ChangeMessageVisibility(&testQueueName, message, timeout)
 		if err != nil {
 			t.Fatalf("Error extending visibility time: %v ", err)
 		}
 
 		t.Logf("Extended visibility timeout for message with receipt: %s", *message.ReceiptHandle)
 
-		messages, err := sqsClient.ReceiveMessage(testQueueName)
+		messages, err := sqsClient.ReceiveMessage(&testQueueName)
 		if err != nil {
 			t.Fatalf("Error receiving message from SQS: %v ", err)
 		}
 
-		t.Logf("Received message from SQS queue: %s with payload:\n%s", testQueueName, *message.Body)
+		t.Logf("Received message from SQS queue: %s with ayload:\n%s", testQueueName, *message.Body)
 
 		message = messages[0]
 		if *message.Body != payload {
@@ -165,7 +165,7 @@ func TestClient_ExtendVisibilityTimeout(t *testing.T) {
 	}
 
 	// Delete message
-	err = sqsClient.DeleteMessage(testQueueName, message.ReceiptHandle)
+	err = sqsClient.DeleteMessage(&testQueueName, message.ReceiptHandle)
 	if err != nil {
 		t.Fatalf("Error deleting message from SQS queue: %v", err)
 	}
@@ -180,13 +180,13 @@ func TestClient_SendReceiveAndDeleteLargeMessage(t *testing.T) {
 	test.AssertNotError(t, err)
 
 	// Send message
-	if err := sqsClient.SendMessage(testQueueName, string(payload)); err != nil {
+	if err := sqsClient.SendMessage(&testQueueName, string(payload)); err != nil {
 		t.Fatalf("Error sending message to SQS: %v ", err)
 	}
 	t.Logf("Sent message to queue: %s.\n", testQueueName)
 
 	// Receive message
-	messages, err := sqsClient.ReceiveMessage(testQueueName)
+	messages, err := sqsClient.ReceiveMessage(&testQueueName)
 	if err != nil {
 		t.Fatalf("Error receiving message from SQS: %v ", err)
 	}
@@ -198,7 +198,7 @@ func TestClient_SendReceiveAndDeleteLargeMessage(t *testing.T) {
 	}
 
 	// Delete message
-	err = sqsClient.DeleteMessage(testQueueName, messages[0].ReceiptHandle)
+	err = sqsClient.DeleteMessage(&testQueueName, messages[0].ReceiptHandle)
 	if err != nil {
 		t.Fatalf("Error deleting message from SQS queue: %v", err)
 	}
@@ -222,13 +222,13 @@ func TestClient_SendReceiveAndDeleteLargeMessageWithAttributes(t *testing.T) {
 	attributes["attribute4"] = &sqs.MessageAttributeValue{DataType: aws.String("String"), StringValue: aws.String("TestAttribute4")}
 
 	// Send message
-	if err := sqsClient.SendMessageWithAttributes(testQueueName, string(payload), attributes); err != nil {
+	if err := sqsClient.SendMessageWithAttributes(&testQueueName, string(payload), attributes); err != nil {
 		t.Fatalf("Error sending message to SQS: %v ", err)
 	}
 	t.Logf("Sent message to queue: %s.\n", testQueueName)
 
 	// Receive message
-	messages, err := sqsClient.ReceiveMessage(testQueueName)
+	messages, err := sqsClient.ReceiveMessage(&testQueueName)
 	if err != nil {
 		t.Fatalf("Error receiving message from SQS: %v ", err)
 	}
@@ -240,7 +240,7 @@ func TestClient_SendReceiveAndDeleteLargeMessageWithAttributes(t *testing.T) {
 	}
 
 	// Delete message
-	err = sqsClient.DeleteMessage(testQueueName, messages[0].ReceiptHandle)
+	err = sqsClient.DeleteMessage(&testQueueName, messages[0].ReceiptHandle)
 	if err != nil {
 		t.Fatalf("Error deleting message from SQS queue: %v", err)
 	}
@@ -256,25 +256,25 @@ func TestClient_SendReceiveAndDeleteSingleMessage_KMS(t *testing.T) {
 	payload := uuid.New().String()
 
 	// Send message
-	if err := sqsClient.SendMessage(testQueueName, payload); err != nil {
+	if err := sqsClient.SendMessage(&testQueueName, payload); err != nil {
 		t.Fatalf("Error sending message to SQS: %v ", err)
 	}
 	t.Logf("Sent message to queue: %s with Payload:\n%s", testQueueName, payload)
 
 	// Receive message
-	messages, err := sqsClient.ReceiveMessage(testQueueName)
+	messages, err := sqsClient.ReceiveMessage(&testQueueName)
 	if err != nil {
 		t.Fatalf("Error receiving message from SQS: %v ", err)
 	}
 
-	t.Logf("Received message from SQS queue: %s with payload:\n%s", testQueueName, *messages[0].Body)
+	t.Logf("Received message from SQS queue: %s with ayload:\n%s", testQueueName, *messages[0].Body)
 
 	if *messages[0].Body != payload {
 		t.Fatalf("Expected: %s. Actual: %s", payload, *messages[0].Body)
 	}
 
 	// Delete message
-	err = sqsClient.DeleteMessage(testQueueName, messages[0].ReceiptHandle)
+	err = sqsClient.DeleteMessage(&testQueueName, messages[0].ReceiptHandle)
 	if err != nil {
 		t.Fatalf("Error deleting message from SQS queue: %v", err)
 	}
@@ -289,13 +289,13 @@ func TestClient_SendReceiveAndDeleteLargeMessage_S3AndKMS(t *testing.T) {
 	test.AssertNotError(t, err)
 
 	// Send message
-	if err := sqsClient.SendMessage(testQueueName, string(payload)); err != nil {
+	if err := sqsClient.SendMessage(&testQueueName, string(payload)); err != nil {
 		t.Fatalf("Error sending message to SQS: %v ", err)
 	}
 	t.Logf("Sent message to queue: %s.\n", testQueueName)
 
 	// Receive message
-	messages, err := sqsClient.ReceiveMessage(testQueueName)
+	messages, err := sqsClient.ReceiveMessage(&testQueueName)
 	if err != nil {
 		t.Fatalf("Error receiving message from SQS: %v ", err)
 	}
@@ -307,7 +307,7 @@ func TestClient_SendReceiveAndDeleteLargeMessage_S3AndKMS(t *testing.T) {
 	}
 
 	// Delete message
-	err = sqsClient.DeleteMessage(testQueueName, messages[0].ReceiptHandle)
+	err = sqsClient.DeleteMessage(&testQueueName, messages[0].ReceiptHandle)
 	if err != nil {
 		t.Fatalf("Error deleting message from SQS queue: %v", err)
 	}

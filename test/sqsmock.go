@@ -90,17 +90,17 @@ func (sm *SQSMock) DeleteMessage(dmi *sqs.DeleteMessageInput) (*sqs.DeleteMessag
 }
 
 // CreateQueueIfNotExists will create a queue representation on the mock if one with the same name doesnt already exist.
-func (sm *SQSMock) CreateQueueIfNotExists(queueURL string) {
-	if _, exists := sm.sendMessageRequests[queueURL]; !exists {
-		sm.sendMessageRequests[queueURL] = make(chan *sqs.SendMessageInput, sm.chanBufferSize)
+func (sm *SQSMock) CreateQueueIfNotExists(queueURL *string) {
+	if _, exists := sm.sendMessageRequests[*queueURL]; !exists {
+		sm.sendMessageRequests[*queueURL] = make(chan *sqs.SendMessageInput, sm.chanBufferSize)
 	}
 
-	if _, exists := sm.sendMessageRequests[queueURL]; !exists {
-		sm.changeMessageVisibilityRequests[queueURL] = make(chan *sqs.ChangeMessageVisibilityInput, sm.chanBufferSize)
+	if _, exists := sm.sendMessageRequests[*queueURL]; !exists {
+		sm.changeMessageVisibilityRequests[*queueURL] = make(chan *sqs.ChangeMessageVisibilityInput, sm.chanBufferSize)
 	}
 
-	if _, exists := sm.sendMessageRequests[queueURL]; !exists {
-		sm.deleteMessageRequests[queueURL] = make(chan *sqs.DeleteMessageInput, sm.chanBufferSize)
+	if _, exists := sm.sendMessageRequests[*queueURL]; !exists {
+		sm.deleteMessageRequests[*queueURL] = make(chan *sqs.DeleteMessageInput, sm.chanBufferSize)
 	}
 }
 
@@ -114,9 +114,9 @@ func (sm *SQSMock) GetQueueUrl(gqui *sqs.GetQueueUrlInput) (*sqs.GetQueueUrlOutp
 
 // WaitUntilMessageDeleted will wait until count delete message requests are received by the mock. Will time out after a configurable amount of time and
 // return an error.
-func (sm *SQSMock) WaitUntilMessageDeleted(queueURL string, count int) error {
+func (sm *SQSMock) WaitUntilMessageDeleted(queueURL *string, count int) error {
 	messagesDeleted := 0
-	c, exists := sm.deleteMessageRequests[queueURL]
+	c, exists := sm.deleteMessageRequests[*queueURL]
 	if !exists {
 		return errors.New("queue doesnt exist")
 	}
@@ -136,12 +136,12 @@ func (sm *SQSMock) WaitUntilMessageDeleted(queueURL string, count int) error {
 
 // WaitUntilMessagesReceived waits until count messages are received and returns the received messages. Will time out after a
 // configurable amount of time and return an error.
-func (sm *SQSMock) WaitUntilMessagesReceived(queueURL string, count int) ([]*sqs.Message, error) {
+func (sm *SQSMock) WaitUntilMessagesReceived(queueURL *string, count int) ([]*sqs.Message, error) {
 	var messages []*sqs.Message
 	noOfMessagesReceived := 0
 
 	receiveMessageInput := &sqs.ReceiveMessageInput{
-		QueueUrl:            &queueURL,
+		QueueUrl:            queueURL,
 		MaxNumberOfMessages: aws.Int64(int64(count + 1)),
 	}
 
