@@ -44,7 +44,7 @@ func sendNMessages(t *testing.T, n int) {
 	sqsMock.CreateQueueIfNotExists(&testQueue)
 
 	for i := 0; i < n; i++ {
-		err := sqsClient.SendMessage(&testQueue, "Testpayload"+strconv.Itoa(i))
+		err := sqsClient.SendMessage(&testQueue, []byte("Testpayload"+strconv.Itoa(i)))
 		test.AssertNotError(t, err)
 	}
 
@@ -66,7 +66,7 @@ func TestClient_SendMessage_MaxSize(t *testing.T) {
 	testQueue := "test-queue"
 	sqsMock.CreateQueueIfNotExists(&testQueue)
 
-	err = sqsClient.SendMessage(&testQueue, string(payload))
+	err = sqsClient.SendMessage(&testQueue, payload)
 	test.AssertNotError(t, err)
 
 	_, err = sqsMock.WaitUntilMessagesReceived(&testQueue, 1)
@@ -90,7 +90,7 @@ func TestClient_SendMessageWithAttributes_MaxSize(t *testing.T) {
 	attributes["a3"] = &sqs.MessageAttributeValue{DataType: aws.String("String"), StringValue: aws.String("Aaaaaaaa")}
 	attributes["a4"] = &sqs.MessageAttributeValue{DataType: aws.String("String"), StringValue: aws.String("Aaaaaaaa")}
 
-	err = sqsClient.SendMessageWithAttributes(&testQueue, string(payload), attributes)
+	err = sqsClient.SendMessageWithAttributes(&testQueue, payload, attributes)
 	test.AssertNotError(t, err)
 
 	_, err = sqsMock.WaitUntilMessagesReceived(&testQueue, 1)
@@ -107,7 +107,7 @@ func TestClient_SendMessage_OverMaxSizeS3NotConfigured(t *testing.T) {
 	testQueue := "test-queue"
 	sqsMock.CreateQueueIfNotExists(&testQueue)
 
-	err = sqsClient.SendMessage(&testQueue, string(payload))
+	err = sqsClient.SendMessage(&testQueue, payload)
 	test.AssertIsError(t, err)
 	test.AssertEqual(t, err, ErrorMaxMessageSizeExceeded)
 }
@@ -129,7 +129,7 @@ func TestClient_SendMessageWithAttributes_OverMaxSizeS3NotConfigured(t *testing.
 	attributes["a3"] = &sqs.MessageAttributeValue{DataType: aws.String("String"), StringValue: aws.String("Aaaaaaaa")}
 	attributes["a4"] = &sqs.MessageAttributeValue{DataType: aws.String("String"), StringValue: aws.String("Aaaaaaaaa")}
 
-	err = sqsClient.SendMessageWithAttributes(&testQueue, string(payload), attributes)
+	err = sqsClient.SendMessageWithAttributes(&testQueue, payload, attributes)
 	test.AssertIsError(t, err)
 	test.AssertEqual(t, err, ErrorMaxMessageSizeExceeded)
 }
@@ -153,7 +153,7 @@ func TestClient_SendMessage_OverMaxSize(t *testing.T) {
 	testQueue := "test-queue"
 	sqsMock.CreateQueueIfNotExists(&testQueue)
 
-	err = sqsClient.SendMessage(&testQueue, string(payload))
+	err = sqsClient.SendMessage(&testQueue, payload)
 	test.AssertNotError(t, err)
 
 	test.AssertEqual(t, s3Mock.PutObjectHandlerCalledCount, 1)
@@ -196,7 +196,7 @@ func TestClient_SendMessageWithAttributes_OverMaxSize(t *testing.T) {
 	attributes["a3"] = &sqs.MessageAttributeValue{DataType: aws.String("String"), StringValue: aws.String("Aaaaaaaa")}
 	attributes["a4"] = &sqs.MessageAttributeValue{DataType: aws.String("String"), StringValue: aws.String("Aaaaaaaaa")}
 
-	err = sqsClient.SendMessageWithAttributes(&testQueue, string(payload), attributes)
+	err = sqsClient.SendMessageWithAttributes(&testQueue, payload, attributes)
 	test.AssertNotError(t, err)
 
 	test.AssertEqual(t, s3Mock.PutObjectHandlerCalledCount, 1)
@@ -235,7 +235,7 @@ func TestClient_SendMessageWithAttributes_MaxNoOfAttributesExceeded(t *testing.T
 	attributes["a10"] = &sqs.MessageAttributeValue{DataType: aws.String("String"), StringValue: aws.String("TestAttribute10")}
 	attributes["a11"] = &sqs.MessageAttributeValue{DataType: aws.String("String"), StringValue: aws.String("TestAttribute11")}
 
-	err := sqsClient.SendMessageWithAttributes(&testQueue, payload, attributes)
+	err := sqsClient.SendMessageWithAttributes(&testQueue, []byte(payload), attributes)
 	test.AssertIsError(t, err)
 	test.AssertEqual(t, err, ErrorMaxNumberOfAttributesExceeded)
 }
@@ -339,7 +339,7 @@ func TestClient_SendMessage_KMS(t *testing.T) {
 	testQueue := "test-queue"
 	sqsMock.CreateQueueIfNotExists(&testQueue)
 
-	err := sqsClient.SendMessage(&testQueue, "TestPayload")
+	err := sqsClient.SendMessage(&testQueue, []byte("TestPayload"))
 	test.AssertNotError(t, err)
 
 	message, err := sqsMock.WaitUntilMessagesReceived(&testQueue, 1)
@@ -399,15 +399,16 @@ func TestClient_SendMessage_Compressed(t *testing.T) {
 	testQueue := "test-queue"
 	sqsMock.CreateQueueIfNotExists(&testQueue)
 
-	err := sqsClient.SendMessage(&testQueue, "TestPayload")
+	err := sqsClient.SendMessage(&testQueue, []byte("TestPayload"))
 	test.AssertNotError(t, err)
 
 	message, err := sqsMock.WaitUntilMessagesReceived(&testQueue, 1)
 	test.AssertNotError(t, err)
 
-	decompressed, err := decompress(*message[0].Body)
+	buf := []byte(*message[0].Body)
+	decompressed, err := decompress(buf)
 	test.AssertNotError(t, err)
-	test.AssertEqual(t, decompressed, "TestPayload")
+	test.AssertEqual(t, string(decompressed), "TestPayload")
 }
 
 func TestClient_ReceiveMessage_Compressed(t *testing.T) {
@@ -417,7 +418,8 @@ func TestClient_ReceiveMessage_Compressed(t *testing.T) {
 	testQueue := "test-queue"
 	sqsMock.CreateQueueIfNotExists(&testQueue)
 
-	compressed, err := compress("TestPayload")
+	buf := []byte("TestPayload")
+	compressed, err := compress(buf)
 	test.AssertNotError(t, err)
 
 	messageAttributes := make(map[string]*sqs.MessageAttributeValue)
@@ -426,7 +428,7 @@ func TestClient_ReceiveMessage_Compressed(t *testing.T) {
 		StringValue: aws.String("gzip"),
 	}
 	sendMessageInput := &sqs.SendMessageInput{
-		MessageBody:       &compressed,
+		MessageBody:       aws.String(string(compressed)),
 		QueueUrl:          &testQueue,
 		MessageAttributes: messageAttributes,
 	}

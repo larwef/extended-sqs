@@ -192,7 +192,7 @@ func New(awsConfig *aws.Config, opt ...ClientOption) (*Client, error) {
 // SendMessage sends a message to the specified queue. Convenient method for sending a message without custom attributes. This
 // does not guarantee there will be no attributes on the message to SQS. The client might add attributes eg. for file events when
 // the payload is uploaded to S3.
-func (c *Client) SendMessage(queueName *string, payload string) error {
+func (c *Client) SendMessage(queueName *string, payload []byte) error {
 	return c.SendMessageWithAttributes(queueName, payload, nil)
 }
 
@@ -200,15 +200,15 @@ func (c *Client) SendMessage(queueName *string, payload string) error {
 // payload will be uploaded to the configured S3 bucket and a file event will be sent on the SQS queue. The bucket where the
 // message was uploaded if put on the message attributes. This means an no of attributes error can be thrown even though this
 // function is called with less than maximum number of attributes.
-func (c *Client) SendMessageWithAttributes(queueName *string, payload string, messageAttributes map[string]*sqs.MessageAttributeValue) error {
+func (c *Client) SendMessageWithAttributes(queueName *string, payload []byte, messageAttributes map[string]*sqs.MessageAttributeValue) error {
 	// Compress payload if compression is enabled
 	if c.opts.compressionEnabled {
-		compressed, err := compress(payload)
-		if err != nil {
+		if compressed, err := compress(payload); err == nil {
+			payload = compressed
+		} else {
 			return err
 		}
 
-		payload = compressed
 		if messageAttributes == nil {
 			messageAttributes = make(map[string]*sqs.MessageAttributeValue)
 		}
@@ -227,7 +227,7 @@ func (c *Client) SendMessageWithAttributes(queueName *string, payload string, me
 			return err
 		}
 
-		payload = string(encryptedEventBytes)
+		payload = encryptedEventBytes
 		if messageAttributes == nil {
 			messageAttributes = make(map[string]*sqs.MessageAttributeValue)
 		}
@@ -236,7 +236,7 @@ func (c *Client) SendMessageWithAttributes(queueName *string, payload string, me
 
 	// Put payload to S3 if S3 is forced of message is larger than max size. Bucket needs to be configured.
 	if (c.opts.forceS3 || getMessageSize(payload, messageAttributes) > maxMessageSize) && c.opts.s3Bucket != "" {
-		fileEvent, err := c.awsS3Client.putObject(&c.opts.s3Bucket, &payload)
+		fileEvent, err := c.awsS3Client.putObject(&c.opts.s3Bucket, payload)
 		if err != nil {
 			return fmt.Errorf("error puting object to S3: %v", err)
 		}
@@ -246,31 +246,33 @@ func (c *Client) SendMessageWithAttributes(queueName *string, payload string, me
 			return err
 		}
 
-		payload = string(fileEventBytes)
+		payload = fileEventBytes
 		if messageAttributes == nil {
 			messageAttributes = make(map[string]*sqs.MessageAttributeValue)
 		}
 		messageAttributes[AttributeNameS3Bucket] = &sqs.MessageAttributeValue{DataType: aws.String("String"), StringValue: &c.opts.s3Bucket}
 	}
 
-	return c.awsSQSClient.sendMessage(queueName, &payload, messageAttributes)
+	return c.awsSQSClient.sendMessage(queueName, payload, messageAttributes)
 }
 
 // The compressed string is base64 encoded because the compressed data might contain characters that are invalid and SQS would
 // throw an error
-func compress(payload string) (string, error) {
+func compress(payload []byte) ([]byte, error) {
 	var buf bytes.Buffer
 	zw := gzip.NewWriter(&buf)
 
-	if _, err := zw.Write([]byte(payload)); err != nil {
-		return "", err
+	if _, err := zw.Write(payload); err != nil {
+		return nil, err
 	}
 
 	if err := zw.Close(); err != nil {
-		return "", err
+		return nil, err
 	}
 
-	return base64.StdEncoding.EncodeToString(buf.Bytes()), nil
+	encoded := make([]byte, base64.StdEncoding.EncodedLen(len(buf.Bytes())))
+	base64.StdEncoding.Encode(encoded, buf.Bytes())
+	return encoded, nil
 }
 
 // ReceiveMessage polls the specified queue and returns the fetched messages. If the S3 bucket attribute is set, the payload is
@@ -315,7 +317,8 @@ func (c *Client) ReceiveMessage(queueName *string) ([]*sqs.Message, error) {
 
 		// If compression key is included the payload needs to be decompressed
 		if _, exists := message.MessageAttributes[AttributeCompression]; exists {
-			if decompressed, err := decompress(*message.Body); err == nil {
+			buf := []byte(*message.Body)
+			if decompressed, err := decompress(buf); err == nil {
 				message.Body = aws.String(string(decompressed))
 				delete(message.MessageAttributes, AttributeCompression)
 			} else {
@@ -327,24 +330,29 @@ func (c *Client) ReceiveMessage(queueName *string) ([]*sqs.Message, error) {
 	return messages, err
 }
 
-func decompress(payload string) (string, error) {
-	decoded, err := base64.StdEncoding.DecodeString(payload)
+func decompress(payload []byte) ([]byte, error) {
+	base64Text := make([]byte, base64.StdEncoding.DecodedLen(len(payload)))
+	l, err := base64.StdEncoding.Decode(base64Text, payload)
 	if err != nil {
-		return "", err
+		return nil, err
 	}
 
-	buf := bytes.NewBuffer(decoded)
+	buf := bytes.NewBuffer(base64Text[:l])
 	zr, err := gzip.NewReader(buf)
 	if err != nil {
-		return "", err
+		return nil, err
 	}
 
 	decompressedBytes, err := ioutil.ReadAll(zr)
-	if err := zr.Close(); err != nil {
-		return "", err
+	if err != nil {
+		return nil, err
 	}
 
-	return string(decompressedBytes), nil
+	if err := zr.Close(); err != nil {
+		return nil, err
+	}
+
+	return decompressedBytes, nil
 }
 
 // ChangeMessageVisibility changes the visibilty of a message. Essentialy putting it back in the queue and unavailable for a

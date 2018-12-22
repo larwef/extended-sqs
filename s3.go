@@ -20,16 +20,16 @@ type s3Client struct {
 }
 
 // TODO: Consider another naming convention for files
-func (s *s3Client) putObject(bucket *string, payload *string) (*fileEvent, error) {
+func (s *s3Client) putObject(bucket *string, payload []byte) (*fileEvent, error) {
 	key := uuid.New().String()
 	poi := &s3.PutObjectInput{
-		Body:   bytes.NewReader([]byte(*payload)),
+		Body:   bytes.NewReader(payload),
 		Bucket: bucket,
 		Key:    &key,
 	}
 
 	fe := &fileEvent{
-		Size:     aws.Int64(int64(len(*payload))),
+		Size:     aws.Int64(int64(len(payload))),
 		Bucket:   bucket,
 		Filename: &key,
 	}

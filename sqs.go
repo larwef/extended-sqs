@@ -2,6 +2,7 @@ package kitsune
 
 import (
 	"fmt"
+	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/service/sqs"
 	"github.com/aws/aws-sdk-go/service/sqs/sqsiface"
 )
@@ -24,12 +25,12 @@ type sqsClient struct {
 	awsSQS sqsiface.SQSAPI
 }
 
-func (s *sqsClient) sendMessage(queueName *string, payload *string, attributes map[string]*sqs.MessageAttributeValue) error {
+func (s *sqsClient) sendMessage(queueName *string, payload []byte, attributes map[string]*sqs.MessageAttributeValue) error {
 	if len(attributes) > maxNumberOfAttributes {
 		return ErrorMaxNumberOfAttributesExceeded
 	}
 
-	if getMessageSize(*payload, attributes) > maxMessageSize {
+	if getMessageSize(payload, attributes) > maxMessageSize {
 		return ErrorMaxMessageSizeExceeded
 	}
 
@@ -41,7 +42,7 @@ func (s *sqsClient) sendMessage(queueName *string, payload *string, attributes m
 	smi := &sqs.SendMessageInput{
 		DelaySeconds:      &s.opts.delaySeconds,
 		MessageAttributes: attributes,
-		MessageBody:       payload,
+		MessageBody:       aws.String(string(payload)),
 		QueueUrl:          queueURL,
 	}
 
@@ -104,7 +105,7 @@ func (s *sqsClient) getQueueURL(queueName *string) (*string, error) {
 	return output.QueueUrl, err
 }
 
-func getMessageSize(payload string, attributes map[string]*sqs.MessageAttributeValue) int {
+func getMessageSize(payload []byte, attributes map[string]*sqs.MessageAttributeValue) int {
 	size := len(payload)
 
 	for key, value := range attributes {

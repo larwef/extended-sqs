@@ -47,7 +47,7 @@ func TestClient_SendReceiveAndDeleteSingleMessage(t *testing.T) {
 	payload := uuid.New().String()
 
 	// Send message
-	if err := sqsClient.SendMessage(&testQueueName, payload); err != nil {
+	if err := sqsClient.SendMessage(&testQueueName, []byte(payload)); err != nil {
 		t.Fatalf("Error sending message to SQS: %v ", err)
 	}
 	t.Logf("Sent message to queue: %s with Payload:\n%s", testQueueName, payload)
@@ -85,7 +85,7 @@ func TestClient_SendReceiveAndDeleteSingleMessageWithAttributes(t *testing.T) {
 	attributes["attribute3"] = &sqs.MessageAttributeValue{DataType: aws.String("String"), StringValue: aws.String("TestAttribute3")}
 
 	// Send message
-	if err := sqsClient.SendMessageWithAttributes(&testQueueName, payload, attributes); err != nil {
+	if err := sqsClient.SendMessageWithAttributes(&testQueueName, []byte(payload), attributes); err != nil {
 		t.Fatalf("Error sending message to SQS: %v ", err)
 	}
 	t.Logf("Sent message to queue: %s with Payload:\n%s", testQueueName, payload)
@@ -122,7 +122,7 @@ func TestClient_ExtendVisibilityTimeout(t *testing.T) {
 	payload := uuid.New().String()
 
 	// Send message
-	if err := sqsClient.SendMessage(&testQueueName, payload); err != nil {
+	if err := sqsClient.SendMessage(&testQueueName, []byte(payload)); err != nil {
 		t.Fatalf("Error sending message to SQS: %v ", err)
 	}
 	t.Logf("Sent message to queue: %s with Payload:\n%s", testQueueName, payload)
@@ -180,7 +180,7 @@ func TestClient_SendReceiveAndDeleteLargeMessage(t *testing.T) {
 	test.AssertNotError(t, err)
 
 	// Send message
-	if err := sqsClient.SendMessage(&testQueueName, string(payload)); err != nil {
+	if err := sqsClient.SendMessage(&testQueueName, payload); err != nil {
 		t.Fatalf("Error sending message to SQS: %v ", err)
 	}
 	t.Logf("Sent message to queue: %s.\n", testQueueName)
@@ -222,7 +222,7 @@ func TestClient_SendReceiveAndDeleteLargeMessageWithAttributes(t *testing.T) {
 	attributes["attribute4"] = &sqs.MessageAttributeValue{DataType: aws.String("String"), StringValue: aws.String("TestAttribute4")}
 
 	// Send message
-	if err := sqsClient.SendMessageWithAttributes(&testQueueName, string(payload), attributes); err != nil {
+	if err := sqsClient.SendMessageWithAttributes(&testQueueName, payload, attributes); err != nil {
 		t.Fatalf("Error sending message to SQS: %v ", err)
 	}
 	t.Logf("Sent message to queue: %s.\n", testQueueName)
@@ -256,7 +256,7 @@ func TestClient_SendReceiveAndDeleteSingleMessage_KMS(t *testing.T) {
 	payload := uuid.New().String()
 
 	// Send message
-	if err := sqsClient.SendMessage(&testQueueName, payload); err != nil {
+	if err := sqsClient.SendMessage(&testQueueName, []byte(payload)); err != nil {
 		t.Fatalf("Error sending message to SQS: %v ", err)
 	}
 	t.Logf("Sent message to queue: %s with Payload:\n%s", testQueueName, payload)
@@ -289,7 +289,7 @@ func TestClient_SendReceiveAndDeleteLargeMessage_S3AndKMS(t *testing.T) {
 	test.AssertNotError(t, err)
 
 	// Send message
-	if err := sqsClient.SendMessage(&testQueueName, string(payload)); err != nil {
+	if err := sqsClient.SendMessage(&testQueueName, payload); err != nil {
 		t.Fatalf("Error sending message to SQS: %v ", err)
 	}
 	t.Logf("Sent message to queue: %s.\n", testQueueName)
@@ -323,7 +323,7 @@ func TestClient_SendReceiveAndDeleteSingleMessage_CompressionEnabled(t *testing.
 	payload := uuid.New().String()
 
 	// Send message
-	if err := sqsClient.SendMessage(&testQueueName, payload); err != nil {
+	if err := sqsClient.SendMessage(&testQueueName, []byte(payload)); err != nil {
 		t.Fatalf("Error sending message to SQS: %v ", err)
 	}
 	t.Logf("Sent message to queue: %s with Payload:\n%s", testQueueName, payload)
