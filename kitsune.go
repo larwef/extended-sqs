@@ -292,7 +292,7 @@ func (c *Client) ReceiveMessage(queueName *string) ([]*sqs.Message, error) {
 			}
 
 			if payload, err := c.awsS3Client.getObject(&fe); err == nil {
-				message.Body = &payload
+				message.Body = aws.String(string(payload))
 				delete(message.MessageAttributes, AttributeNameS3Bucket)
 			} else {
 				return nil, err

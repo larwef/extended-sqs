@@ -39,7 +39,7 @@ func (s *s3Client) putObject(bucket *string, payload []byte) (*fileEvent, error)
 	return fe, err
 }
 
-func (s *s3Client) getObject(fe *fileEvent) (string, error) {
+func (s *s3Client) getObject(fe *fileEvent) ([]byte, error) {
 	goi := &s3.GetObjectInput{
 		Bucket: fe.Bucket,
 		Key:    fe.Filename,
@@ -47,9 +47,10 @@ func (s *s3Client) getObject(fe *fileEvent) (string, error) {
 
 	goo, err := s.awsS3.GetObject(goi)
 	if err != nil {
-		return "", err
+		return nil, err
 	}
+	defer goo.Body.Close()
 
 	payload, err := ioutil.ReadAll(goo.Body)
-	return string(payload), err
+	return payload, err
 }
