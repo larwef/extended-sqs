@@ -283,7 +283,7 @@ func TestClient_SendReceiveAndDeleteSingleMessage_KMS(t *testing.T) {
 }
 
 func TestClient_SendReceiveAndDeleteLargeMessage_S3AndKMS(t *testing.T) {
-	sqsClient := getClient(t, kitsune.S3Bucket(testBucket), kitsune.KMSKeyID(testKMSKey))
+	sqsClient := getClient(t, kitsune.S3Bucket(testBucket), kitsune.KMSKeyID(testKMSKey), kitsune.CompressionEnabled(true))
 
 	payload, err := ioutil.ReadFile("../testdata/size262145Bytes.txt")
 	test.AssertNotError(t, err)
@@ -315,4 +315,36 @@ func TestClient_SendReceiveAndDeleteLargeMessage_S3AndKMS(t *testing.T) {
 	t.Logf("Message with recept: %s deleted from SQS Queue", *messages[0].ReceiptHandle)
 
 	t.Logf("Payload:\n%s", *messages[0].Body)
+}
+
+func TestClient_SendReceiveAndDeleteSingleMessage_CompressionEnabled(t *testing.T) {
+	sqsClient := getClient(t, kitsune.CompressionEnabled(true))
+
+	payload := uuid.New().String()
+
+	// Send message
+	if err := sqsClient.SendMessage(&testQueueName, payload); err != nil {
+		t.Fatalf("Error sending message to SQS: %v ", err)
+	}
+	t.Logf("Sent message to queue: %s with Payload:\n%s", testQueueName, payload)
+
+	// Receive message
+	messages, err := sqsClient.ReceiveMessage(&testQueueName)
+	if err != nil {
+		t.Fatalf("Error receiving message from SQS: %v ", err)
+	}
+
+	t.Logf("Received message from SQS queue: %s with ayload:\n%s", testQueueName, *messages[0].Body)
+
+	if *messages[0].Body != payload {
+		t.Fatalf("Expected: %s. Actual: %s", payload, *messages[0].Body)
+	}
+
+	// Delete message
+	err = sqsClient.DeleteMessage(&testQueueName, messages[0].ReceiptHandle)
+	if err != nil {
+		t.Fatalf("Error deleting message from SQS queue: %v", err)
+	}
+
+	t.Logf("Message with recept: %s deleted from SQS Queue", *messages[0].ReceiptHandle)
 }

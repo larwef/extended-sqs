@@ -1,6 +1,9 @@
 package kitsune
 
 import (
+	"bytes"
+	"compress/gzip"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -9,6 +12,7 @@ import (
 	"github.com/aws/aws-sdk-go/service/kms"
 	"github.com/aws/aws-sdk-go/service/s3"
 	"github.com/aws/aws-sdk-go/service/sqs"
+	"io/ioutil"
 	"math"
 	"strconv"
 )
@@ -20,6 +24,9 @@ const (
 
 	// AttributeNameKMSKey used to pass the KMS key used to encryptData the data key.
 	AttributeNameKMSKey = "kmsKey"
+
+	// AttributeCompression is used to signal that the payload is compressed
+	AttributeCompression = "compression"
 )
 
 // Client object handles communication with SQS
@@ -46,6 +53,7 @@ type options struct {
 	s3Bucket                 string
 	forceS3                  bool
 	kmsKeyID                 string
+	compressionEnabled       bool
 }
 
 var defaultClientOptions = options{
@@ -56,8 +64,9 @@ var defaultClientOptions = options{
 	maxVisibilityTimeout:     900,
 	waitTimeSeconds:          20,
 	attributeNames:           []*string{aws.String("ApproximateReceiveCount")},
-	messageAttributeNames:    []*string{aws.String(AttributeNameS3Bucket), aws.String(AttributeNameKMSKey)},
+	messageAttributeNames:    []*string{aws.String(AttributeNameS3Bucket), aws.String(AttributeNameKMSKey), aws.String(AttributeCompression)},
 	forceS3:                  false,
+	compressionEnabled:       false,
 }
 
 // ClientOption sets configuration options for a awsSQSClient.
@@ -135,6 +144,11 @@ func KMSKeyID(s string) ClientOption {
 	return func(o *options) { o.kmsKeyID = s }
 }
 
+// CompressionEnabled is used to enable or disable compression of payload
+func CompressionEnabled(b bool) ClientOption {
+	return func(o *options) { o.compressionEnabled = b }
+}
+
 // New returns a new awsSQSClient with configuration set as defined by the ClientOptions. Will create a s3Client from the
 // aws.Config if a bucket is set.
 func New(awsConfig *aws.Config, opt ...ClientOption) (*Client, error) {
@@ -187,6 +201,20 @@ func (c *Client) SendMessage(queueName *string, payload string) error {
 // message was uploaded if put on the message attributes. This means an no of attributes error can be thrown even though this
 // function is called with less than maximum number of attributes.
 func (c *Client) SendMessageWithAttributes(queueName *string, payload string, messageAttributes map[string]*sqs.MessageAttributeValue) error {
+	// Compress payload if compression is enabled
+	if c.opts.compressionEnabled {
+		compressed, err := compress(payload)
+		if err != nil {
+			return err
+		}
+
+		payload = compressed
+		if messageAttributes == nil {
+			messageAttributes = make(map[string]*sqs.MessageAttributeValue)
+		}
+		messageAttributes[AttributeCompression] = &sqs.MessageAttributeValue{DataType: aws.String("String"), StringValue: aws.String("gzip")}
+	}
+
 	// Encrypt the payload if a KMS key is configured
 	if c.opts.kmsKeyID != "" {
 		encryptedEvent, err := c.awsKMSClient.encrypt(&c.opts.kmsKeyID, []byte(payload))
@@ -199,12 +227,11 @@ func (c *Client) SendMessageWithAttributes(queueName *string, payload string, me
 			return err
 		}
 
+		payload = string(encryptedEventBytes)
 		if messageAttributes == nil {
 			messageAttributes = make(map[string]*sqs.MessageAttributeValue)
 		}
-
 		messageAttributes[AttributeNameKMSKey] = &sqs.MessageAttributeValue{DataType: aws.String("String"), StringValue: &c.opts.kmsKeyID}
-		payload = string(encryptedEventBytes)
 	}
 
 	// Put payload to S3 if S3 is forced of message is larger than max size. Bucket needs to be configured.
@@ -219,15 +246,31 @@ func (c *Client) SendMessageWithAttributes(queueName *string, payload string, me
 			return err
 		}
 
+		payload = string(fileEventBytes)
 		if messageAttributes == nil {
 			messageAttributes = make(map[string]*sqs.MessageAttributeValue)
 		}
-
 		messageAttributes[AttributeNameS3Bucket] = &sqs.MessageAttributeValue{DataType: aws.String("String"), StringValue: &c.opts.s3Bucket}
-		payload = string(fileEventBytes)
 	}
 
 	return c.awsSQSClient.sendMessage(queueName, &payload, messageAttributes)
+}
+
+// The compressed string is base64 encoded because the compressed data might contain characters that are invalid and SQS would
+// throw an error
+func compress(payload string) (string, error) {
+	var buf bytes.Buffer
+	zw := gzip.NewWriter(&buf)
+
+	if _, err := zw.Write([]byte(payload)); err != nil {
+		return "", err
+	}
+
+	if err := zw.Close(); err != nil {
+		return "", err
+	}
+
+	return base64.StdEncoding.EncodeToString(buf.Bytes()), nil
 }
 
 // ReceiveMessage polls the specified queue and returns the fetched messages. If the S3 bucket attribute is set, the payload is
@@ -269,9 +312,39 @@ func (c *Client) ReceiveMessage(queueName *string) ([]*sqs.Message, error) {
 				return nil, err
 			}
 		}
+
+		// If compression key is included the payload needs to be decompressed
+		if _, exists := message.MessageAttributes[AttributeCompression]; exists {
+			if decompressed, err := decompress(*message.Body); err == nil {
+				message.Body = aws.String(string(decompressed))
+				delete(message.MessageAttributes, AttributeCompression)
+			} else {
+				return nil, err
+			}
+		}
 	}
 
 	return messages, err
+}
+
+func decompress(payload string) (string, error) {
+	decoded, err := base64.StdEncoding.DecodeString(payload)
+	if err != nil {
+		return "", err
+	}
+
+	buf := bytes.NewBuffer(decoded)
+	zr, err := gzip.NewReader(buf)
+	if err != nil {
+		return "", err
+	}
+
+	decompressedBytes, err := ioutil.ReadAll(zr)
+	if err := zr.Close(); err != nil {
+		return "", err
+	}
+
+	return string(decompressedBytes), nil
 }
 
 // ChangeMessageVisibility changes the visibilty of a message. Essentialy putting it back in the queue and unavailable for a

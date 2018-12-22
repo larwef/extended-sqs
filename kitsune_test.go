@@ -391,3 +391,50 @@ func TestClient_ReceiveMessage_KMS(t *testing.T) {
 	test.AssertNotError(t, err)
 	test.AssertEqual(t, *messages[0].Body, "TestPayload")
 }
+
+func TestClient_SendMessage_Compressed(t *testing.T) {
+	sqsMock := test.NewSQSMock(5, int64(10))
+	sqsClient := getClient(sqsMock, nil, nil, CompressionEnabled(true))
+
+	testQueue := "test-queue"
+	sqsMock.CreateQueueIfNotExists(&testQueue)
+
+	err := sqsClient.SendMessage(&testQueue, "TestPayload")
+	test.AssertNotError(t, err)
+
+	message, err := sqsMock.WaitUntilMessagesReceived(&testQueue, 1)
+	test.AssertNotError(t, err)
+
+	decompressed, err := decompress(*message[0].Body)
+	test.AssertNotError(t, err)
+	test.AssertEqual(t, decompressed, "TestPayload")
+}
+
+func TestClient_ReceiveMessage_Compressed(t *testing.T) {
+	sqsMock := test.NewSQSMock(5, int64(10))
+
+	sqsClient := getClient(sqsMock, nil, nil, CompressionEnabled(true))
+	testQueue := "test-queue"
+	sqsMock.CreateQueueIfNotExists(&testQueue)
+
+	compressed, err := compress("TestPayload")
+	test.AssertNotError(t, err)
+
+	messageAttributes := make(map[string]*sqs.MessageAttributeValue)
+	messageAttributes[AttributeCompression] = &sqs.MessageAttributeValue{
+		DataType:    aws.String("String"),
+		StringValue: aws.String("gzip"),
+	}
+	sendMessageInput := &sqs.SendMessageInput{
+		MessageBody:       &compressed,
+		QueueUrl:          &testQueue,
+		MessageAttributes: messageAttributes,
+	}
+
+	_, err = sqsMock.SendMessage(sendMessageInput)
+	test.AssertNotError(t, err)
+
+	messages, err := sqsClient.ReceiveMessage(&testQueue)
+	test.AssertNotError(t, err)
+	test.AssertEqual(t, *messages[0].Body, "TestPayload")
+}

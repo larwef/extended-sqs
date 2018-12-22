@@ -37,7 +37,8 @@ client, err := kitsune.New(&config, options...)
 - [x] Support large payloads by using S3
 - [x] Encrypt and decrypt with KMS
     - [ ] Cache KMS key
-
+- [x] Compression
+- [ ] Simple message consumer which handles message lifecycle (receive, process, delete, backoff)
 
 ## Policy suggestion
 Make sure the user/role has the appripriate permissions. This policy assumes there is one queue, one bucket and one key being
