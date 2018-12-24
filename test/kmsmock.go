@@ -4,7 +4,6 @@ import (
 	"crypto/aes"
 	"crypto/cipher"
 	"crypto/rand"
-	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/service/kms"
 	"github.com/aws/aws-sdk-go/service/kms/kmsiface"
 	"io"
@@ -26,7 +25,7 @@ func (k *KmsMock) GenerateDataKey(gki *kms.GenerateDataKeyInput) (*kms.GenerateD
 	k.GenerateDataKeyCalledCount++
 	return &kms.GenerateDataKeyOutput{
 		CiphertextBlob: cipherTextKeys,
-		KeyId:          aws.String("keyID"),
+		KeyId:          gki.KeyId,
 		Plaintext:      plaintTextKeys,
 	}, nil
 }
@@ -35,7 +34,6 @@ func (k *KmsMock) GenerateDataKey(gki *kms.GenerateDataKeyInput) (*kms.GenerateD
 func (k *KmsMock) Decrypt(di *kms.DecryptInput) (*kms.DecryptOutput, error) {
 	k.DecryptCalledCount++
 	return &kms.DecryptOutput{
-		KeyId:     aws.String("keyID"),
 		Plaintext: plaintTextKeys,
 	}, nil
 }

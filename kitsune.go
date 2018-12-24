@@ -15,6 +15,7 @@ import (
 	"io/ioutil"
 	"math"
 	"strconv"
+	"time"
 )
 
 const (
@@ -41,32 +42,36 @@ type Client struct {
 }
 
 type options struct {
-	delaySeconds             int64
-	maxNumberOfMessages      int64
-	initialVisibilityTimeout int64
-	maxVisibilityTimeout     int64
-	backoffFactor            int64
-	backoffFunction          func(int64, int64, int64, int64) int64
-	waitTimeSeconds          int64
-	attributeNames           []*string
-	messageAttributeNames    []*string
-	s3Bucket                 string
-	forceS3                  bool
-	kmsKeyID                 string
-	compressionEnabled       bool
+	delaySeconds                int64
+	maxNumberOfMessages         int64
+	initialVisibilityTimeout    int64
+	maxVisibilityTimeout        int64
+	backoffFactor               int64
+	backoffFunction             func(int64, int64, int64, int64) int64
+	waitTimeSeconds             int64
+	attributeNames              []*string
+	messageAttributeNames       []*string
+	s3Bucket                    string
+	forceS3                     bool
+	kmsKeyID                    string
+	compressionEnabled          bool
+	kmsKeyCacheEnabled          bool
+	kmsKeyCacheExpirationPeriod time.Duration
 }
 
 var defaultClientOptions = options{
-	delaySeconds:             0,
-	maxNumberOfMessages:      10,
-	initialVisibilityTimeout: 60,
-	backoffFactor:            2,
-	maxVisibilityTimeout:     900,
-	waitTimeSeconds:          20,
-	attributeNames:           []*string{aws.String("ApproximateReceiveCount")},
-	messageAttributeNames:    []*string{aws.String(AttributeNameS3Bucket), aws.String(AttributeNameKMSKey), aws.String(AttributeCompression)},
-	forceS3:                  false,
-	compressionEnabled:       false,
+	delaySeconds:                0,
+	maxNumberOfMessages:         10,
+	initialVisibilityTimeout:    60,
+	backoffFactor:               2,
+	maxVisibilityTimeout:        900,
+	waitTimeSeconds:             20,
+	attributeNames:              []*string{aws.String("ApproximateReceiveCount")},
+	messageAttributeNames:       []*string{aws.String(AttributeNameS3Bucket), aws.String(AttributeNameKMSKey), aws.String(AttributeCompression)},
+	forceS3:                     false,
+	compressionEnabled:          false,
+	kmsKeyCacheEnabled:          false,
+	kmsKeyCacheExpirationPeriod: 5 * time.Minute,
 }
 
 // ClientOption sets configuration options for a awsSQSClient.
@@ -139,18 +144,29 @@ func ForceS3(b bool) ClientOption {
 	return func(o *options) { o.forceS3 = b }
 }
 
-// KMSKeyID sets the KMS key to be used for encryption
+// KMSKeyID sets the KMS key to be used for encryption.
 func KMSKeyID(s string) ClientOption {
 	return func(o *options) { o.kmsKeyID = s }
 }
 
-// CompressionEnabled is used to enable or disable compression of payload
+// CompressionEnabled is used to enable or disable compression of payload.
 func CompressionEnabled(b bool) ClientOption {
 	return func(o *options) { o.compressionEnabled = b }
 }
 
+// KMSKeyCacheEnabled used to enable or disable kms key caching. Note that caching is against best practise, but might provide
+// significant savings by reducing calls to KMS.
+func KMSKeyCacheEnabled(b bool) ClientOption {
+	return func(o *options) { o.kmsKeyCacheEnabled = b }
+}
+
+// KMSKeyCacheExpirationPeriod sets the amount of time an entry in the kms key cache will be valid.
+func KMSKeyCacheExpirationPeriod(t time.Duration) ClientOption {
+	return func(o *options) { o.kmsKeyCacheExpirationPeriod = t }
+}
+
 // New returns a new awsSQSClient with configuration set as defined by the ClientOptions. Will create a s3Client from the
-// aws.Config if a bucket is set.
+// aws.Config if a bucket is set. Same goes for KMS.
 func New(awsConfig *aws.Config, opt ...ClientOption) (*Client, error) {
 	awsSession, err := session.NewSession(awsConfig)
 	if err != nil {
@@ -177,6 +193,11 @@ func New(awsConfig *aws.Config, opt ...ClientOption) (*Client, error) {
 	var kmsc *kmsClient
 	if opts.kmsKeyID != "" {
 		kmsc = &kmsClient{
+			cacheEnabled: opts.kmsKeyCacheEnabled,
+			cache: keyCache{
+				entries:          make(map[[16]byte]cacheEntry),
+				expirationPeriod: opts.kmsKeyCacheExpirationPeriod,
+			},
 			awsKMS: kms.New(awsSession),
 		}
 	}

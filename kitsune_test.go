@@ -31,8 +31,15 @@ func getClient(awsSQS sqsiface.SQSAPI, awsS3 s3iface.S3API, awsKMS kmsiface.KMSA
 	return &Client{
 		awsSQSClient: &sqsClient{awsSQS: awsSQS, opts: &opts},
 		awsS3Client:  &s3Client{awsS3: awsS3},
-		awsKMSClient: &kmsClient{awsKMS: awsKMS},
-		opts:         opts,
+		awsKMSClient: &kmsClient{
+			cache: keyCache{
+				entries:          make(map[[16]byte]cacheEntry),
+				expirationPeriod: opts.kmsKeyCacheExpirationPeriod,
+			},
+			cacheEnabled: opts.kmsKeyCacheEnabled,
+			awsKMS:       awsKMS,
+		},
+		opts: opts,
 	}
 }
 
@@ -390,6 +397,93 @@ func TestClient_ReceiveMessage_KMS(t *testing.T) {
 	messages, err := sqsClient.ReceiveMessage(&testQueue)
 	test.AssertNotError(t, err)
 	test.AssertEqual(t, *messages[0].Body, "TestPayload")
+}
+
+func TestClient_SendMessage_WithKMSCache(t *testing.T) {
+	sqsMock := test.NewSQSMock(5, int64(10))
+	kmsMock := &test.KmsMock{}
+	sqsClient := getClient(sqsMock, nil, kmsMock, KMSKeyID("keyID"), KMSKeyCacheEnabled(true))
+
+	testQueue := "test-queue"
+	sqsMock.CreateQueueIfNotExists(&testQueue)
+
+	for i := 0; i < 5; i++ {
+		err := sqsClient.SendMessage(&testQueue, []byte("TestPayload"))
+		test.AssertNotError(t, err)
+	}
+
+	_, err := sqsMock.WaitUntilMessagesReceived(&testQueue, 5)
+	test.AssertNotError(t, err)
+
+	test.AssertEqual(t, kmsMock.GenerateDataKeyCalledCount, 1)
+}
+
+func TestClient_ReceiveMessage_WithKMSCache(t *testing.T) {
+	sqsMock := test.NewSQSMock(5, int64(10))
+	kmsMock := &test.KmsMock{}
+
+	sqsClient := getClient(sqsMock, nil, kmsMock, KMSKeyID("keyID"))
+	testQueue := "test-queue"
+	sqsMock.CreateQueueIfNotExists(&testQueue)
+
+	ee := encryptedEvent{
+		EncryptedEncryptionKey: []byte{1, 2, 3, 0, 120, 117, 254, 40, 232, 55, 217, 84, 174, 75, 59, 2, 126, 80, 228, 40, 30, 154, 9, 181, 250, 93, 124, 148, 204, 162, 114, 168, 221, 48, 205, 156, 51, 1, 175, 64, 33, 234, 59, 118, 135, 116, 69, 35, 55, 119, 205, 97, 34, 121, 0, 0, 0, 126, 48, 124, 6, 9, 42, 134, 72, 134, 247, 13, 1, 7, 6, 160, 111, 48, 109, 2, 1, 0, 48, 104, 6, 9, 42, 134, 72, 134, 247, 13, 1, 7, 1, 48, 30, 6, 9, 96, 134, 72, 1, 101, 3, 4, 1, 46, 48, 17, 4, 12, 206, 50, 137, 217, 81, 233, 59, 171, 93, 91, 58, 132, 2, 1, 16, 128, 59, 113, 1, 196, 78, 149, 34, 228, 82, 195, 190, 192, 248, 95, 192, 11, 108, 200, 117, 57, 165, 152, 54, 95, 169, 176, 53, 71, 217, 119, 34, 10, 26, 143, 240, 124, 202, 53, 167, 94, 151, 240, 14, 124, 48, 154, 153, 11, 46, 189, 202, 163, 21, 232, 230, 10, 202, 105, 98, 175},
+		KeyID:                  "KeyID",
+		Payload:                []byte{102, 205, 159, 72, 200, 107, 205, 104, 53, 185, 73, 108, 171, 58, 12, 177, 114, 113, 72, 157, 2, 234, 89, 248, 169, 25, 247, 54, 249, 249, 189, 35, 226, 248, 252, 167, 110, 245, 127},
+	}
+
+	eebytes, err := json.Marshal(ee)
+	test.AssertNotError(t, err)
+
+	messageAttributes := make(map[string]*sqs.MessageAttributeValue)
+	messageAttributes[AttributeNameKMSKey] = &sqs.MessageAttributeValue{
+		DataType:    aws.String("String"),
+		StringValue: aws.String("keyID"),
+	}
+
+	sendMessageInput := &sqs.SendMessageInput{
+		MessageBody:       aws.String(string(eebytes)),
+		QueueUrl:          &testQueue,
+		MessageAttributes: messageAttributes,
+	}
+
+	for i := 0; i < 5; i++ {
+		_, err = sqsMock.SendMessage(sendMessageInput)
+		test.AssertNotError(t, err)
+	}
+
+	messages, err := sqsClient.ReceiveMessage(&testQueue)
+	test.AssertNotError(t, err)
+	test.AssertEqual(t, len(messages), 5)
+	test.AssertEqual(t, kmsMock.DecryptCalledCount, 1)
+}
+
+func TestClient_SendAndReceiveMessage_WithKMSCache(t *testing.T) {
+	sqsMock := test.NewSQSMock(5, int64(10))
+	kmsMock := &test.KmsMock{}
+	sqsClient := getClient(sqsMock, nil, kmsMock, KMSKeyID("keyID"), KMSKeyCacheEnabled(true))
+
+	testQueue := "test-queue"
+	sqsMock.CreateQueueIfNotExists(&testQueue)
+
+	for i := 0; i < 5; i++ {
+		err := sqsClient.SendMessage(&testQueue, []byte("TestPayload"+strconv.Itoa(i)))
+		test.AssertNotError(t, err)
+	}
+
+	test.AssertEqual(t, kmsMock.GenerateDataKeyCalledCount, 1)
+
+	messages, err := sqsClient.ReceiveMessage(&testQueue)
+	test.AssertNotError(t, err)
+	test.AssertEqual(t, len(messages), 5)
+	test.AssertEqual(t, *messages[0].Body, "TestPayload0")
+	test.AssertEqual(t, *messages[1].Body, "TestPayload1")
+	test.AssertEqual(t, *messages[2].Body, "TestPayload2")
+	test.AssertEqual(t, *messages[3].Body, "TestPayload3")
+	test.AssertEqual(t, *messages[4].Body, "TestPayload4")
+
+	test.AssertEqual(t, kmsMock.DecryptCalledCount, 0)
+
 }
 
 func TestClient_SendMessage_Compressed(t *testing.T) {
