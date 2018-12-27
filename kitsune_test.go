@@ -29,8 +29,12 @@ func getClient(awsSQS sqsiface.SQSAPI, awsS3 s3iface.S3API, awsKMS kmsiface.KMSA
 	}
 
 	return &Client{
-		awsSQSClient: &sqsClient{awsSQS: awsSQS, opts: &opts},
-		awsS3Client:  &s3Client{awsS3: awsS3},
+		awsSQSClient: &sqsClient{
+			opts:       &opts,
+			queueCache: make(map[string]string),
+			awsSQS:     awsSQS,
+		},
+		awsS3Client: &s3Client{awsS3: awsS3},
 		awsKMSClient: &kmsClient{
 			cache: keyCache{
 				entries:          make(map[[16]byte]cacheEntry),

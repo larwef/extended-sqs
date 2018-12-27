@@ -27,6 +27,7 @@ func getClient(t *testing.T, opts ...kitsune.ClientOption) *kitsune.Client {
 	}
 
 	options := []kitsune.ClientOption{
+		kitsune.DelaySeconds(0),
 		kitsune.InitialVisibilityTimeout(5),
 		kitsune.MaxVisibilityTimeout(10),
 	}

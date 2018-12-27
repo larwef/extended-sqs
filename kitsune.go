@@ -60,7 +60,7 @@ type options struct {
 }
 
 var defaultClientOptions = options{
-	delaySeconds:                0,
+	delaySeconds:                30,
 	maxNumberOfMessages:         10,
 	initialVisibilityTimeout:    60,
 	backoffFactor:               2,
@@ -179,8 +179,9 @@ func New(awsConfig *aws.Config, opt ...ClientOption) (*Client, error) {
 	}
 
 	sqsc := &sqsClient{
-		opts:   &opts,
-		awsSQS: sqs.New(awsSession),
+		opts:       &opts,
+		queueCache: make(map[string]string),
+		awsSQS:     sqs.New(awsSession),
 	}
 
 	var s3c *s3Client

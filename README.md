@@ -36,7 +36,7 @@ client, err := kitsune.New(&config, options...)
 ## Planned features:
 - [x] Support large payloads by using S3
 - [x] Encrypt and decrypt with KMS
-    - [ ] Cache KMS key
+    - [x] Cache KMS key
 - [x] Compression
 - [ ] Simple message consumer which handles message lifecycle (receive, process, delete, backoff)
 

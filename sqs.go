@@ -21,8 +21,9 @@ var ErrorMaxMessageSizeExceeded = fmt.Errorf("maximum message size of %d bytes e
 var ErrorMaxNumberOfAttributesExceeded = fmt.Errorf("maximum number of attributes of %d exceeded", maxNumberOfAttributes)
 
 type sqsClient struct {
-	opts   *options
-	awsSQS sqsiface.SQSAPI
+	opts       *options
+	queueCache map[string]string
+	awsSQS     sqsiface.SQSAPI
 }
 
 func (s *sqsClient) sendMessage(queueName *string, payload []byte, attributes map[string]*sqs.MessageAttributeValue) error {
@@ -101,7 +102,15 @@ func (s *sqsClient) deleteMessage(queueName *string, receiptHandle *string) erro
 }
 
 func (s *sqsClient) getQueueURL(queueName *string) (*string, error) {
+	if value, exists := s.queueCache[*queueName]; exists {
+		return &value, nil
+	}
+
 	output, err := s.awsSQS.GetQueueUrl(&sqs.GetQueueUrlInput{QueueName: queueName})
+	if err == nil {
+		s.queueCache[*queueName] = *output.QueueUrl
+	}
+
 	return output.QueueUrl, err
 }
 
