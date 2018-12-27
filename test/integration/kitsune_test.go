@@ -10,6 +10,7 @@ import (
 	"github.com/larwef/kitsune"
 	"github.com/larwef/kitsune/test"
 	"io/ioutil"
+	"strconv"
 	"testing"
 )
 
@@ -348,4 +349,33 @@ func TestClient_SendReceiveAndDeleteSingleMessage_CompressionEnabled(t *testing.
 	}
 
 	t.Logf("Message with recept: %s deleted from SQS Queue", *messages[0].ReceiptHandle)
+}
+
+func TestBatch_SendReceiveAndDeleteBatch(t *testing.T) {
+	sqsClient := getClient(t)
+
+	batch := sqsClient.NewBatch()
+	for i := 0; i < 10; i++ {
+		n, err := batch.Add([]byte("TestPayload"), strconv.Itoa(i), nil)
+		test.AssertNotError(t, err)
+		test.AssertEqual(t, n, i+1)
+	}
+
+	output, err := batch.Send(&testQueueName)
+	test.AssertNotError(t, err)
+	test.AssertEqual(t, len(output.Successful), 10)
+	test.AssertEqual(t, len(output.Failed), 0)
+
+	var messages []*sqs.Message
+	for len(messages) < 10 {
+		msgs, err := sqsClient.ReceiveMessage(&testQueueName)
+		test.AssertNotError(t, err)
+		messages = append(messages, msgs...)
+	}
+
+	for _, message := range messages {
+		test.AssertEqual(t, *message.Body, "TestPayload")
+		err := sqsClient.DeleteMessage(&testQueueName, message.ReceiptHandle)
+		test.AssertNotError(t, err)
+	}
 }

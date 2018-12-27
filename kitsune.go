@@ -433,3 +433,58 @@ func max(a, b int64) int64 {
 
 	return b
 }
+
+// Batch is used to aggregate messages and send as a batch to SQS.
+type Batch struct {
+	client    *Client
+	size      int
+	ids       map[string]struct{}
+	entries   []*sqs.SendMessageBatchRequestEntry
+	processed bool
+}
+
+// NewBatch returns a new Batch object.
+func (c *Client) NewBatch() *Batch {
+	return &Batch{
+		client: c,
+		ids:    make(map[string]struct{}),
+	}
+}
+
+// Size returns the size of a batch.
+func (b *Batch) Size() int {
+	return b.size
+}
+
+// ErrorMaxBatchSizeExceeded is returned when trying to add more to a batch than is allowed
+var ErrorMaxBatchSizeExceeded = fmt.Errorf("maximum batch size of %d exceeded", maxBatchSize)
+
+// ErrorIDNotUnique is returned when adding a message to a batch with the same id as another message
+var ErrorIDNotUnique = errors.New("all ids in a batch needs to be unique")
+
+// Add adds a message to a batch.
+func (b *Batch) Add(payload []byte, id string, messageAttributes map[string]*sqs.MessageAttributeValue) (int, error) {
+	if b.size >= maxBatchSize {
+		return b.size, ErrorMaxBatchSizeExceeded
+	}
+
+	if _, exists := b.ids[id]; exists {
+		return b.size, ErrorIDNotUnique
+	}
+
+	batchRequestEntry, err := b.client.awsSQSClient.bacthRequestEntry(payload, &id, messageAttributes)
+	if err != nil {
+		return b.size, nil
+	}
+
+	b.entries = append(b.entries, batchRequestEntry)
+
+	b.size++
+	b.ids[id] = struct{}{}
+	return b.size, nil
+}
+
+// Send is used to send a batch
+func (b *Batch) Send(queueName *string) (*sqs.SendMessageBatchOutput, error) {
+	return b.client.awsSQSClient.sendMessageBatch(queueName, b.entries)
+}

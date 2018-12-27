@@ -538,3 +538,49 @@ func TestClient_ReceiveMessage_Compressed(t *testing.T) {
 	test.AssertNotError(t, err)
 	test.AssertEqual(t, *messages[0].Body, "TestPayload")
 }
+
+func TestBatch_Send(t *testing.T) {
+	sqsMock := test.NewSQSMock(5, int64(20))
+	sqsClient := getClient(sqsMock, nil, nil)
+	testQueue := "test-queue"
+	sqsMock.CreateQueueIfNotExists(&testQueue)
+
+	batch := sqsClient.NewBatch()
+	for i := 0; i < 10; i++ {
+		n, err := batch.Add([]byte("TestPayload"+strconv.Itoa(i)), strconv.Itoa(i), nil)
+		test.AssertNotError(t, err)
+		test.AssertEqual(t, n, i+1)
+	}
+
+	_, err := batch.Send(&testQueue)
+	test.AssertNotError(t, err)
+
+	_, err = sqsMock.WaitUntilMessagesReceived(&testQueue, 10)
+	test.AssertNotError(t, err)
+}
+
+func TestBatch_Add_MaxBatchSizeExceeded(t *testing.T) {
+	sqsMock := test.NewSQSMock(5, int64(20))
+	sqsClient := getClient(sqsMock, nil, nil)
+
+	batch := sqsClient.NewBatch()
+	for i := 0; i < 10; i++ {
+		n, err := batch.Add([]byte("TestPayload"), strconv.Itoa(i), nil)
+		test.AssertNotError(t, err)
+		test.AssertEqual(t, n, i+1)
+	}
+
+	_, err := batch.Add([]byte("TestPayload"), "11", nil)
+	test.AssertEqual(t, err, ErrorMaxBatchSizeExceeded)
+}
+
+func TestBatch_Add_DuplicateIdError(t *testing.T) {
+	sqsMock := test.NewSQSMock(5, int64(20))
+	sqsClient := getClient(sqsMock, nil, nil)
+
+	batch := sqsClient.NewBatch()
+	_, err := batch.Add([]byte("TestPayload"), "someId", nil)
+	test.AssertNotError(t, err)
+	_, err = batch.Add([]byte("TestPayload"), "someId", nil)
+	test.AssertEqual(t, err, ErrorIDNotUnique)
+}

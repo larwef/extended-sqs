@@ -43,6 +43,26 @@ func (sm *SQSMock) SendMessage(smi *sqs.SendMessageInput) (*sqs.SendMessageOutpu
 	return nil, errors.New("queue doesnt exist")
 }
 
+// SendMessageBatch sends a batch to the mock.
+func (sm *SQSMock) SendMessageBatch(sbi *sqs.SendMessageBatchInput) (*sqs.SendMessageBatchOutput, error) {
+	var output sqs.SendMessageBatchOutput
+	for _, entry := range sbi.Entries {
+		if c, exists := sm.sendMessageRequests[*sbi.QueueUrl]; exists {
+			c <- &sqs.SendMessageInput{
+				MessageBody:       entry.MessageBody,
+				MessageAttributes: entry.MessageAttributes,
+			}
+			output.Successful = append(output.Successful, &sqs.SendMessageBatchResultEntry{
+				Id: entry.Id,
+			})
+		} else {
+			return nil, errors.New("queue doesnt exist")
+		}
+	}
+
+	return &output, nil
+}
+
 // ReceiveMessage receives a message from the mock.
 func (sm *SQSMock) ReceiveMessage(rmi *sqs.ReceiveMessageInput) (*sqs.ReceiveMessageOutput, error) {
 	rmo := &sqs.ReceiveMessageOutput{}

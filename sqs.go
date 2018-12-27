@@ -8,10 +8,12 @@ import (
 )
 
 const (
-	// The maximum size of a SQS payload is 262,144 bytes
+	// The maximum size of a SQS payload is 262,144 bytes.
 	maxMessageSize = 256 * 1024
-	// The maximum number of custom attributes are 10
+	// The maximum number of custom attributes are 10.
 	maxNumberOfAttributes = 10
+	// Maximum number of messages allowed in a batch.
+	maxBatchSize = 10
 )
 
 // ErrorMaxMessageSizeExceeded is returned when the combined size of the payload and the message attributes exceeds maxMessageSize.
@@ -49,6 +51,37 @@ func (s *sqsClient) sendMessage(queueName *string, payload []byte, attributes ma
 
 	_, err = s.awsSQS.SendMessage(smi)
 	return err
+}
+
+func (s *sqsClient) sendMessageBatch(queueName *string, entries []*sqs.SendMessageBatchRequestEntry) (*sqs.SendMessageBatchOutput, error) {
+	queueURL, err := s.getQueueURL(queueName)
+	if err != nil {
+		return nil, err
+	}
+
+	sbo := &sqs.SendMessageBatchInput{
+		Entries:  entries,
+		QueueUrl: queueURL,
+	}
+
+	return s.awsSQS.SendMessageBatch(sbo)
+}
+
+func (s *sqsClient) bacthRequestEntry(payload []byte, id *string, attributes map[string]*sqs.MessageAttributeValue) (*sqs.SendMessageBatchRequestEntry, error) {
+	if len(attributes) > maxNumberOfAttributes {
+		return nil, ErrorMaxNumberOfAttributesExceeded
+	}
+
+	if getMessageSize(payload, attributes) > maxMessageSize {
+		return nil, ErrorMaxMessageSizeExceeded
+	}
+
+	return &sqs.SendMessageBatchRequestEntry{
+		DelaySeconds:      &s.opts.delaySeconds,
+		Id:                id,
+		MessageAttributes: attributes,
+		MessageBody:       aws.String(string(payload)),
+	}, nil
 }
 
 func (s *sqsClient) receiveMessage(queueName *string) ([]*sqs.Message, error) {
