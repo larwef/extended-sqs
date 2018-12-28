@@ -22,18 +22,42 @@ var ErrorMaxMessageSizeExceeded = fmt.Errorf("maximum message size of %d bytes e
 // ErrorMaxNumberOfAttributesExceeded is returned when the number of attributes exceeds maxNumberOfAttributes.
 var ErrorMaxNumberOfAttributesExceeded = fmt.Errorf("maximum number of attributes of %d exceeded", maxNumberOfAttributes)
 
+type sqsEvent struct {
+	payload           []byte
+	messageAttributes map[string]*sqs.MessageAttributeValue
+	id                string
+}
+
+func (s *sqsEvent) size() int {
+	size := len(s.payload)
+
+	for key, value := range s.messageAttributes {
+		size += len(key) + len(*value.DataType) + len(*value.StringValue)
+	}
+
+	return size
+}
+
 type sqsClient struct {
 	opts       *options
 	queueCache map[string]string
 	awsSQS     sqsiface.SQSAPI
 }
 
-func (s *sqsClient) sendMessage(queueName *string, payload []byte, attributes map[string]*sqs.MessageAttributeValue) error {
-	if len(attributes) > maxNumberOfAttributes {
+func newSQSClient(awsSQS sqsiface.SQSAPI, opts *options) *sqsClient {
+	return &sqsClient{
+		opts:       opts,
+		queueCache: make(map[string]string),
+		awsSQS:     awsSQS,
+	}
+}
+
+func (s *sqsClient) sendMessage(queueName *string, event *sqsEvent) error {
+	if len(event.messageAttributes) > maxNumberOfAttributes {
 		return ErrorMaxNumberOfAttributesExceeded
 	}
 
-	if getMessageSize(payload, attributes) > maxMessageSize {
+	if event.size() > maxMessageSize {
 		return ErrorMaxMessageSizeExceeded
 	}
 
@@ -44,8 +68,8 @@ func (s *sqsClient) sendMessage(queueName *string, payload []byte, attributes ma
 
 	smi := &sqs.SendMessageInput{
 		DelaySeconds:      &s.opts.delaySeconds,
-		MessageAttributes: attributes,
-		MessageBody:       aws.String(string(payload)),
+		MessageAttributes: event.messageAttributes,
+		MessageBody:       aws.String(string(event.payload)),
 		QueueUrl:          queueURL,
 	}
 
@@ -67,20 +91,20 @@ func (s *sqsClient) sendMessageBatch(queueName *string, entries []*sqs.SendMessa
 	return s.awsSQS.SendMessageBatch(sbo)
 }
 
-func (s *sqsClient) bacthRequestEntry(payload []byte, id *string, attributes map[string]*sqs.MessageAttributeValue) (*sqs.SendMessageBatchRequestEntry, error) {
-	if len(attributes) > maxNumberOfAttributes {
+func (s *sqsClient) bacthRequestEntry(event *sqsEvent) (*sqs.SendMessageBatchRequestEntry, error) {
+	if len(event.messageAttributes) > maxNumberOfAttributes {
 		return nil, ErrorMaxNumberOfAttributesExceeded
 	}
 
-	if getMessageSize(payload, attributes) > maxMessageSize {
+	if event.size() > maxMessageSize {
 		return nil, ErrorMaxMessageSizeExceeded
 	}
 
 	return &sqs.SendMessageBatchRequestEntry{
 		DelaySeconds:      &s.opts.delaySeconds,
-		Id:                id,
-		MessageAttributes: attributes,
-		MessageBody:       aws.String(string(payload)),
+		Id:                &event.id,
+		MessageAttributes: event.messageAttributes,
+		MessageBody:       aws.String(string(event.payload)),
 	}, nil
 }
 
@@ -145,14 +169,4 @@ func (s *sqsClient) getQueueURL(queueName *string) (*string, error) {
 	}
 
 	return output.QueueUrl, err
-}
-
-func getMessageSize(payload []byte, attributes map[string]*sqs.MessageAttributeValue) int {
-	size := len(payload)
-
-	for key, value := range attributes {
-		size += len(key) + len(*value.DataType) + len(*value.StringValue)
-	}
-
-	return size
 }

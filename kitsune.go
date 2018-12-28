@@ -178,29 +178,16 @@ func New(awsConfig *aws.Config, opt ...ClientOption) (*Client, error) {
 		o(&opts)
 	}
 
-	sqsc := &sqsClient{
-		opts:       &opts,
-		queueCache: make(map[string]string),
-		awsSQS:     sqs.New(awsSession),
-	}
+	sqsc := newSQSClient(sqs.New(awsSession), &opts)
 
 	var s3c *s3Client
 	if opts.s3Bucket != "" {
-		s3c = &s3Client{
-			awsS3: s3.New(awsSession),
-		}
+		s3c = newS3Client(s3.New(awsSession))
 	}
 
 	var kmsc *kmsClient
 	if opts.kmsKeyID != "" {
-		kmsc = &kmsClient{
-			cacheEnabled: opts.kmsKeyCacheEnabled,
-			cache: keyCache{
-				entries:          make(map[[16]byte]cacheEntry),
-				expirationPeriod: opts.kmsKeyCacheExpirationPeriod,
-			},
-			awsKMS: kms.New(awsSession),
-		}
+		kmsc = newKMSClient(kms.New(awsSession), &opts)
 	}
 
 	return &Client{
@@ -223,64 +210,93 @@ func (c *Client) SendMessage(queueName *string, payload []byte) error {
 // message was uploaded if put on the message attributes. This means an no of attributes error can be thrown even though this
 // function is called with less than maximum number of attributes.
 func (c *Client) SendMessageWithAttributes(queueName *string, payload []byte, messageAttributes map[string]*sqs.MessageAttributeValue) error {
+	event := &sqsEvent{
+		payload:           payload,
+		messageAttributes: messageAttributes,
+	}
+
 	// Compress payload if compression is enabled
 	if c.opts.compressionEnabled {
-		if compressed, err := compress(payload); err == nil {
-			payload = compressed
-		} else {
+		if err := compress(event); err != nil {
 			return err
 		}
-
-		if messageAttributes == nil {
-			messageAttributes = make(map[string]*sqs.MessageAttributeValue)
-		}
-		messageAttributes[AttributeCompression] = &sqs.MessageAttributeValue{DataType: aws.String("String"), StringValue: aws.String("gzip")}
 	}
 
 	// Encrypt the payload if a KMS key is configured
 	if c.opts.kmsKeyID != "" {
-		encryptedEvent, err := c.awsKMSClient.encrypt(&c.opts.kmsKeyID, []byte(payload))
-		if err != nil {
-			return fmt.Errorf("error encrypting payload: %v", err)
-		}
-
-		encryptedEventBytes, err := json.Marshal(encryptedEvent)
-		if err != nil {
+		if err := c.encrypt(event); err != nil {
 			return err
 		}
-
-		payload = encryptedEventBytes
-		if messageAttributes == nil {
-			messageAttributes = make(map[string]*sqs.MessageAttributeValue)
-		}
-		messageAttributes[AttributeNameKMSKey] = &sqs.MessageAttributeValue{DataType: aws.String("String"), StringValue: &c.opts.kmsKeyID}
 	}
 
 	// Put payload to S3 if S3 is forced of message is larger than max size. Bucket needs to be configured.
-	if (c.opts.forceS3 || getMessageSize(payload, messageAttributes) > maxMessageSize) && c.opts.s3Bucket != "" {
-		fileEvent, err := c.awsS3Client.putObject(&c.opts.s3Bucket, payload)
-		if err != nil {
-			return fmt.Errorf("error puting object to S3: %v", err)
-		}
-
-		fileEventBytes, err := json.Marshal(&fileEvent)
-		if err != nil {
+	if (c.opts.forceS3 || event.size() > maxMessageSize) && c.opts.s3Bucket != "" {
+		if err := c.uploadToS3(event); err != nil {
 			return err
 		}
-
-		payload = fileEventBytes
-		if messageAttributes == nil {
-			messageAttributes = make(map[string]*sqs.MessageAttributeValue)
-		}
-		messageAttributes[AttributeNameS3Bucket] = &sqs.MessageAttributeValue{DataType: aws.String("String"), StringValue: &c.opts.s3Bucket}
 	}
 
-	return c.awsSQSClient.sendMessage(queueName, payload, messageAttributes)
+	return c.awsSQSClient.sendMessage(queueName, event)
+}
+
+func compress(s *sqsEvent) error {
+	if compressed, err := compressData(s.payload); err == nil {
+		s.payload = compressed
+	} else {
+		return err
+	}
+
+	if s.messageAttributes == nil {
+		s.messageAttributes = make(map[string]*sqs.MessageAttributeValue)
+	}
+	s.messageAttributes[AttributeCompression] = &sqs.MessageAttributeValue{DataType: aws.String("String"), StringValue: aws.String("gzip")}
+
+	return nil
+}
+
+func (c *Client) encrypt(s *sqsEvent) error {
+	encryptedEvent, err := c.awsKMSClient.encrypt(&c.opts.kmsKeyID, s.payload)
+	if err != nil {
+		return fmt.Errorf("error encrypting payload: %v", err)
+	}
+
+	encryptedEventBytes, err := json.Marshal(encryptedEvent)
+	if err != nil {
+		return err
+	}
+
+	s.payload = encryptedEventBytes
+	if s.messageAttributes == nil {
+		s.messageAttributes = make(map[string]*sqs.MessageAttributeValue)
+	}
+	s.messageAttributes[AttributeNameKMSKey] = &sqs.MessageAttributeValue{DataType: aws.String("String"), StringValue: &c.opts.kmsKeyID}
+
+	return nil
+}
+
+func (c *Client) uploadToS3(s *sqsEvent) error {
+	fileEvent, err := c.awsS3Client.putObject(&c.opts.s3Bucket, s.payload)
+	if err != nil {
+		return fmt.Errorf("error puting object to S3: %v", err)
+	}
+
+	fileEventBytes, err := json.Marshal(&fileEvent)
+	if err != nil {
+		return err
+	}
+
+	s.payload = fileEventBytes
+	if s.messageAttributes == nil {
+		s.messageAttributes = make(map[string]*sqs.MessageAttributeValue)
+	}
+	s.messageAttributes[AttributeNameS3Bucket] = &sqs.MessageAttributeValue{DataType: aws.String("String"), StringValue: &c.opts.s3Bucket}
+
+	return err
 }
 
 // The compressed string is base64 encoded because the compressed data might contain characters that are invalid and SQS would
 // throw an error
-func compress(payload []byte) ([]byte, error) {
+func compressData(payload []byte) ([]byte, error) {
 	var buf bytes.Buffer
 	zw := gzip.NewWriter(&buf)
 
@@ -340,7 +356,7 @@ func (c *Client) ReceiveMessage(queueName *string) ([]*sqs.Message, error) {
 		// If compression key is included the payload needs to be decompressed
 		if _, exists := message.MessageAttributes[AttributeCompression]; exists {
 			buf := []byte(*message.Body)
-			if decompressed, err := decompress(buf); err == nil {
+			if decompressed, err := decompressData(buf); err == nil {
 				message.Body = aws.String(string(decompressed))
 				delete(message.MessageAttributes, AttributeCompression)
 			} else {
@@ -352,7 +368,7 @@ func (c *Client) ReceiveMessage(queueName *string) ([]*sqs.Message, error) {
 	return messages, err
 }
 
-func decompress(payload []byte) ([]byte, error) {
+func decompressData(payload []byte) ([]byte, error) {
 	base64Text := make([]byte, base64.StdEncoding.DecodedLen(len(payload)))
 	l, err := base64.StdEncoding.Decode(base64Text, payload)
 	if err != nil {
@@ -434,12 +450,18 @@ func max(a, b int64) int64 {
 	return b
 }
 
+// ErrorMaxBatchSizeExceeded is returned when trying to add more to a batch than is allowed
+var ErrorMaxBatchSizeExceeded = fmt.Errorf("maximum batch size of %d exceeded", maxBatchSize)
+
+// ErrorIDNotUnique is returned when adding a message to a batch with the same id as another message
+var ErrorIDNotUnique = errors.New("all ids in a batch needs to be unique")
+
 // Batch is used to aggregate messages and send as a batch to SQS.
 type Batch struct {
 	client    *Client
 	size      int
 	ids       map[string]struct{}
-	entries   []*sqs.SendMessageBatchRequestEntry
+	events    []*sqsEvent
 	processed bool
 }
 
@@ -456,13 +478,7 @@ func (b *Batch) Size() int {
 	return b.size
 }
 
-// ErrorMaxBatchSizeExceeded is returned when trying to add more to a batch than is allowed
-var ErrorMaxBatchSizeExceeded = fmt.Errorf("maximum batch size of %d exceeded", maxBatchSize)
-
-// ErrorIDNotUnique is returned when adding a message to a batch with the same id as another message
-var ErrorIDNotUnique = errors.New("all ids in a batch needs to be unique")
-
-// Add adds a message to a batch.
+// Add adds a message to a batch. Returns the number of messages in the batch and error.
 func (b *Batch) Add(payload []byte, id string, messageAttributes map[string]*sqs.MessageAttributeValue) (int, error) {
 	if b.size >= maxBatchSize {
 		return b.size, ErrorMaxBatchSizeExceeded
@@ -472,12 +488,13 @@ func (b *Batch) Add(payload []byte, id string, messageAttributes map[string]*sqs
 		return b.size, ErrorIDNotUnique
 	}
 
-	batchRequestEntry, err := b.client.awsSQSClient.bacthRequestEntry(payload, &id, messageAttributes)
-	if err != nil {
-		return b.size, nil
+	event := &sqsEvent{
+		payload:           payload,
+		messageAttributes: messageAttributes,
+		id:                id,
 	}
 
-	b.entries = append(b.entries, batchRequestEntry)
+	b.events = append(b.events, event)
 
 	b.size++
 	b.ids[id] = struct{}{}
@@ -486,5 +503,12 @@ func (b *Batch) Add(payload []byte, id string, messageAttributes map[string]*sqs
 
 // Send is used to send a batch
 func (b *Batch) Send(queueName *string) (*sqs.SendMessageBatchOutput, error) {
-	return b.client.awsSQSClient.sendMessageBatch(queueName, b.entries)
+	var entries []*sqs.SendMessageBatchRequestEntry
+	// TODO: Fix so messages that casuses errors are reported
+	for _, event := range b.events {
+		batchRequestEntry, _ := b.client.awsSQSClient.bacthRequestEntry(event)
+		entries = append(entries, batchRequestEntry)
+	}
+
+	return b.client.awsSQSClient.sendMessageBatch(queueName, entries)
 }

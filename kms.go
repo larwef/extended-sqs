@@ -55,9 +55,25 @@ func (kc *keyCache) clean() {
 }
 
 type kmsClient struct {
-	cache        keyCache
-	cacheEnabled bool
-	awsKMS       kmsiface.KMSAPI
+	opts   *options
+	cache  keyCache
+	awsKMS kmsiface.KMSAPI
+}
+
+func newKMSClient(awsKMS kmsiface.KMSAPI, opts *options) *kmsClient {
+	var cache keyCache
+	if opts.kmsKeyCacheEnabled {
+		cache = keyCache{
+			entries:          make(map[[16]byte]cacheEntry),
+			expirationPeriod: opts.kmsKeyCacheExpirationPeriod,
+		}
+	}
+
+	return &kmsClient{
+		opts:   opts,
+		cache:  cache,
+		awsKMS: awsKMS,
+	}
 }
 
 func (k *kmsClient) encrypt(keyID *string, payload []byte) (*encryptedEvent, error) {
@@ -92,7 +108,7 @@ func (k *kmsClient) generateDataKey(gki *kms.GenerateDataKeyInput) (*kms.Generat
 	}
 
 	gko, err := k.awsKMS.GenerateDataKey(gki)
-	if k.cacheEnabled && err == nil {
+	if k.opts.kmsKeyCacheEnabled && err == nil {
 		// Put with both key name and ciphertext so it wont need to get its own key for decryption
 		k.cache.put(md5.Sum([]byte(*gki.KeyId)), gko.Plaintext, gko.CiphertextBlob)
 		k.cache.put(md5.Sum(gko.CiphertextBlob), gko.Plaintext, gko.CiphertextBlob)
@@ -122,7 +138,7 @@ func (k *kmsClient) fetchKey(di *kms.DecryptInput) (*kms.DecryptOutput, error) {
 	}
 
 	do, err := k.awsKMS.Decrypt(di)
-	if k.cacheEnabled && err == nil {
+	if k.opts.kmsKeyCacheEnabled && err == nil {
 		k.cache.put(md5.Sum(di.CiphertextBlob), do.Plaintext, di.CiphertextBlob)
 	}
 

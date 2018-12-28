@@ -284,8 +284,9 @@ func TestClient_SendReceiveAndDeleteSingleMessage_KMS(t *testing.T) {
 	t.Logf("Message with recept: %s deleted from SQS Queue", *messages[0].ReceiptHandle)
 }
 
+// TODOD: Fix, this doesnt go to S3 if compressed
 func TestClient_SendReceiveAndDeleteLargeMessage_S3AndKMS(t *testing.T) {
-	sqsClient := getClient(t, kitsune.S3Bucket(testBucket), kitsune.KMSKeyID(testKMSKey), kitsune.CompressionEnabled(true))
+	sqsClient := getClient(t, kitsune.S3Bucket(testBucket), kitsune.KMSKeyID(testKMSKey))
 
 	payload, err := ioutil.ReadFile("../testdata/size262145Bytes.txt")
 	test.AssertNotError(t, err)

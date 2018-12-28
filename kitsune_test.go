@@ -29,21 +29,10 @@ func getClient(awsSQS sqsiface.SQSAPI, awsS3 s3iface.S3API, awsKMS kmsiface.KMSA
 	}
 
 	return &Client{
-		awsSQSClient: &sqsClient{
-			opts:       &opts,
-			queueCache: make(map[string]string),
-			awsSQS:     awsSQS,
-		},
-		awsS3Client: &s3Client{awsS3: awsS3},
-		awsKMSClient: &kmsClient{
-			cache: keyCache{
-				entries:          make(map[[16]byte]cacheEntry),
-				expirationPeriod: opts.kmsKeyCacheExpirationPeriod,
-			},
-			cacheEnabled: opts.kmsKeyCacheEnabled,
-			awsKMS:       awsKMS,
-		},
-		opts: opts,
+		awsSQSClient: newSQSClient(awsSQS, &opts),
+		awsS3Client:  newS3Client(awsS3),
+		awsKMSClient: newKMSClient(awsKMS, &opts),
+		opts:         opts,
 	}
 }
 
@@ -504,7 +493,7 @@ func TestClient_SendMessage_Compressed(t *testing.T) {
 	test.AssertNotError(t, err)
 
 	buf := []byte(*message[0].Body)
-	decompressed, err := decompress(buf)
+	decompressed, err := decompressData(buf)
 	test.AssertNotError(t, err)
 	test.AssertEqual(t, string(decompressed), "TestPayload")
 }
@@ -517,7 +506,7 @@ func TestClient_ReceiveMessage_Compressed(t *testing.T) {
 	sqsMock.CreateQueueIfNotExists(&testQueue)
 
 	buf := []byte("TestPayload")
-	compressed, err := compress(buf)
+	compressed, err := compressData(buf)
 	test.AssertNotError(t, err)
 
 	messageAttributes := make(map[string]*sqs.MessageAttributeValue)

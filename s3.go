@@ -19,6 +19,12 @@ type s3Client struct {
 	awsS3 s3iface.S3API
 }
 
+func newS3Client(awsS3 s3iface.S3API) *s3Client {
+	return &s3Client{
+		awsS3: awsS3,
+	}
+}
+
 // TODO: Consider another naming convention for files
 func (s *s3Client) putObject(bucket *string, payload []byte) (*fileEvent, error) {
 	key := uuid.New().String()
