@@ -5,6 +5,7 @@ import (
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/service/sqs"
 	"github.com/aws/aws-sdk-go/service/sqs/sqsiface"
+	"sync"
 )
 
 const (
@@ -42,6 +43,7 @@ type sqsClient struct {
 	opts       *options
 	queueCache map[string]string
 	awsSQS     sqsiface.SQSAPI
+	rwLock     sync.RWMutex
 }
 
 func newSQSClient(awsSQS sqsiface.SQSAPI, opts *options) *sqsClient {
@@ -159,10 +161,15 @@ func (s *sqsClient) deleteMessage(queueName *string, receiptHandle *string) erro
 }
 
 func (s *sqsClient) getQueueURL(queueName *string) (*string, error) {
+	s.rwLock.RLock()
 	if value, exists := s.queueCache[*queueName]; exists {
+		s.rwLock.RUnlock()
 		return &value, nil
 	}
+	s.rwLock.RUnlock()
 
+	s.rwLock.Lock()
+	defer s.rwLock.Unlock()
 	output, err := s.awsSQS.GetQueueUrl(&sqs.GetQueueUrlInput{QueueName: queueName})
 	if err == nil {
 		s.queueCache[*queueName] = *output.QueueUrl

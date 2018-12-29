@@ -9,6 +9,7 @@ import (
 	"github.com/aws/aws-sdk-go/service/kms"
 	"github.com/aws/aws-sdk-go/service/kms/kmsiface"
 	"io"
+	"sync"
 	"time"
 )
 
@@ -21,6 +22,7 @@ type encryptedEvent struct {
 type keyCache struct {
 	entries          map[[16]byte]cacheEntry
 	expirationPeriod time.Duration
+	rwLock           sync.RWMutex
 }
 
 type cacheEntry struct {
@@ -32,6 +34,9 @@ type cacheEntry struct {
 func (kc *keyCache) put(key [16]byte, plainText []byte, cipherText []byte) {
 	kc.clean()
 
+	kc.rwLock.Lock()
+	defer kc.rwLock.Unlock()
+
 	kc.entries[key] = cacheEntry{
 		plainText:  plainText,
 		cipherText: cipherText,
@@ -42,11 +47,17 @@ func (kc *keyCache) put(key [16]byte, plainText []byte, cipherText []byte) {
 func (kc *keyCache) get(key [16]byte) (cacheEntry, bool) {
 	kc.clean()
 
+	kc.rwLock.RLock()
+	defer kc.rwLock.RUnlock()
+
 	entry, exists := kc.entries[key]
 	return entry, exists
 }
 
 func (kc *keyCache) clean() {
+	kc.rwLock.Lock()
+	defer kc.rwLock.Unlock()
+
 	for key, value := range kc.entries {
 		if value.entered.Add(kc.expirationPeriod).Before(time.Now()) {
 			delete(kc.entries, key)
@@ -56,14 +67,14 @@ func (kc *keyCache) clean() {
 
 type kmsClient struct {
 	opts   *options
-	cache  keyCache
+	cache  *keyCache
 	awsKMS kmsiface.KMSAPI
 }
 
 func newKMSClient(awsKMS kmsiface.KMSAPI, opts *options) *kmsClient {
-	var cache keyCache
+	var cache *keyCache
 	if opts.kmsKeyCacheEnabled {
-		cache = keyCache{
+		cache = &keyCache{
 			entries:          make(map[[16]byte]cacheEntry),
 			expirationPeriod: opts.kmsKeyCacheExpirationPeriod,
 		}
@@ -99,12 +110,14 @@ func (k *kmsClient) encrypt(keyID *string, payload []byte) (*encryptedEvent, err
 }
 
 func (k *kmsClient) generateDataKey(gki *kms.GenerateDataKeyInput) (*kms.GenerateDataKeyOutput, error) {
-	if entry, exists := k.cache.get(md5.Sum([]byte(*gki.KeyId))); exists {
-		return &kms.GenerateDataKeyOutput{
-			CiphertextBlob: entry.cipherText,
-			KeyId:          gki.KeyId,
-			Plaintext:      entry.plainText,
-		}, nil
+	if k.cache != nil {
+		if entry, exists := k.cache.get(md5.Sum([]byte(*gki.KeyId))); exists {
+			return &kms.GenerateDataKeyOutput{
+				CiphertextBlob: entry.cipherText,
+				KeyId:          gki.KeyId,
+				Plaintext:      entry.plainText,
+			}, nil
+		}
 	}
 
 	gko, err := k.awsKMS.GenerateDataKey(gki)
@@ -131,10 +144,12 @@ func (k *kmsClient) decrypt(ee *encryptedEvent) ([]byte, error) {
 }
 
 func (k *kmsClient) fetchKey(di *kms.DecryptInput) (*kms.DecryptOutput, error) {
-	if entry, exists := k.cache.get(md5.Sum(di.CiphertextBlob)); exists {
-		return &kms.DecryptOutput{
-			Plaintext: entry.plainText,
-		}, nil
+	if k.cache != nil {
+		if entry, exists := k.cache.get(md5.Sum(di.CiphertextBlob)); exists {
+			return &kms.DecryptOutput{
+				Plaintext: entry.plainText,
+			}, nil
+		}
 	}
 
 	do, err := k.awsKMS.Decrypt(di)
