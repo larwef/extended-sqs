@@ -15,6 +15,8 @@ import (
 	"io/ioutil"
 	"math"
 	"strconv"
+	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -210,7 +212,7 @@ func (c *Client) SendMessage(queueName *string, payload []byte) error {
 // message was uploaded if put on the message attributes. This means an no of attributes error can be thrown even though this
 // function is called with less than maximum number of attributes.
 func (c *Client) SendMessageWithAttributes(queueName *string, payload []byte, messageAttributes map[string]*sqs.MessageAttributeValue) error {
-	event := &sqsEvent{
+	event := &sqsSendEvent{
 		payload:           payload,
 		messageAttributes: messageAttributes,
 	}
@@ -239,7 +241,7 @@ func (c *Client) SendMessageWithAttributes(queueName *string, payload []byte, me
 	return c.awsSQSClient.sendMessage(queueName, event)
 }
 
-func compress(s *sqsEvent) error {
+func compress(s *sqsSendEvent) error {
 	if compressed, err := compressData(s.payload); err == nil {
 		s.payload = compressed
 	} else {
@@ -254,7 +256,7 @@ func compress(s *sqsEvent) error {
 	return nil
 }
 
-func (c *Client) encrypt(s *sqsEvent) error {
+func (c *Client) encrypt(s *sqsSendEvent) error {
 	encryptedEvent, err := c.awsKMSClient.encrypt(&c.opts.kmsKeyID, s.payload)
 	if err != nil {
 		return fmt.Errorf("error encrypting payload: %v", err)
@@ -274,7 +276,7 @@ func (c *Client) encrypt(s *sqsEvent) error {
 	return nil
 }
 
-func (c *Client) uploadToS3(s *sqsEvent) error {
+func (c *Client) uploadToS3(s *sqsSendEvent) error {
 	fileEvent, err := c.awsS3Client.putObject(&c.opts.s3Bucket, s.payload)
 	if err != nil {
 		return fmt.Errorf("error puting object to S3: %v", err)
@@ -456,13 +458,17 @@ var ErrorMaxBatchSizeExceeded = fmt.Errorf("maximum batch size of %d exceeded", 
 // ErrorIDNotUnique is returned when adding a message to a batch with the same id as another message
 var ErrorIDNotUnique = errors.New("all ids in a batch needs to be unique")
 
+// ErrorBatchAlreadySent is returned when trying to send a batch which is already sent.
+var ErrorBatchAlreadySent = errors.New("all ids in a batch needs to be unique")
+
 // Batch is used to aggregate messages and send as a batch to SQS.
 type Batch struct {
-	client    *Client
-	size      int
-	ids       map[string]struct{}
-	events    []*sqsEvent
-	processed bool
+	client *Client
+	size   int
+	ids    map[string]struct{}
+	events []*sqsSendEvent
+	m      sync.Mutex
+	sent   uint32
 }
 
 // NewBatch returns a new Batch object.
@@ -488,7 +494,7 @@ func (b *Batch) Add(payload []byte, id string, messageAttributes map[string]*sqs
 		return b.size, ErrorIDNotUnique
 	}
 
-	event := &sqsEvent{
+	event := &sqsSendEvent{
 		payload:           payload,
 		messageAttributes: messageAttributes,
 		id:                id,
@@ -503,12 +509,63 @@ func (b *Batch) Add(payload []byte, id string, messageAttributes map[string]*sqs
 
 // Send is used to send a batch
 func (b *Batch) Send(queueName *string) (*sqs.SendMessageBatchOutput, error) {
-	var entries []*sqs.SendMessageBatchRequestEntry
-	// TODO: Fix so messages that casuses errors are reported
-	for _, event := range b.events {
-		batchRequestEntry, _ := b.client.awsSQSClient.bacthRequestEntry(event)
-		entries = append(entries, batchRequestEntry)
+	if atomic.LoadUint32(&b.sent) == 1 {
+		return nil, ErrorBatchAlreadySent
 	}
 
-	return b.client.awsSQSClient.sendMessageBatch(queueName, entries)
+	b.m.Lock()
+	defer b.m.Unlock()
+	if b.sent == 0 {
+		defer atomic.StoreUint32(&b.sent, 1)
+	} else {
+		return nil, ErrorBatchAlreadySent
+	}
+
+	var entries []*sqs.SendMessageBatchRequestEntry
+	var failed []*sqs.BatchResultErrorEntry
+	for _, event := range b.events {
+		// Compress payload if compression is enabled
+		if b.client.opts.compressionEnabled {
+			if err := compress(event); err != nil {
+				failed = append(failed, getBatchResultError(&event.id, err))
+				continue
+			}
+		}
+
+		// Encrypt the payload if a KMS key is configured
+		if b.client.opts.kmsKeyID != "" {
+			if err := b.client.encrypt(event); err != nil {
+				failed = append(failed, getBatchResultError(&event.id, err))
+				continue
+			}
+		}
+
+		// Put payload to S3 if S3 is forced of message is larger than max size. Bucket needs to be configured.
+		if (b.client.opts.forceS3 || event.size() > maxMessageSize) && b.client.opts.s3Bucket != "" {
+			if err := b.client.uploadToS3(event); err != nil {
+				failed = append(failed, getBatchResultError(&event.id, err))
+				continue
+			}
+		}
+
+		batchRequestEntry, err := b.client.awsSQSClient.bacthRequestEntry(event)
+		if err != nil {
+			failed = append(failed, getBatchResultError(&event.id, err))
+		} else {
+			entries = append(entries, batchRequestEntry)
+		}
+	}
+
+	batchOutput, err := b.client.awsSQSClient.sendMessageBatch(queueName, entries)
+	batchOutput.Failed = append(batchOutput.Failed, failed...)
+	return batchOutput, err
+}
+
+func getBatchResultError(id *string, err error) *sqs.BatchResultErrorEntry {
+	return &sqs.BatchResultErrorEntry{
+		Code:        aws.String("custom"), // TODO: Find out what codes are actually used
+		Id:          id,
+		Message:     aws.String(fmt.Sprintf("client error when sending batch: %v\n", err)),
+		SenderFault: aws.Bool(true),
+	}
 }

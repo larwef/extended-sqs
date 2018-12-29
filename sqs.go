@@ -22,13 +22,13 @@ var ErrorMaxMessageSizeExceeded = fmt.Errorf("maximum message size of %d bytes e
 // ErrorMaxNumberOfAttributesExceeded is returned when the number of attributes exceeds maxNumberOfAttributes.
 var ErrorMaxNumberOfAttributesExceeded = fmt.Errorf("maximum number of attributes of %d exceeded", maxNumberOfAttributes)
 
-type sqsEvent struct {
+type sqsSendEvent struct {
 	payload           []byte
 	messageAttributes map[string]*sqs.MessageAttributeValue
 	id                string
 }
 
-func (s *sqsEvent) size() int {
+func (s *sqsSendEvent) size() int {
 	size := len(s.payload)
 
 	for key, value := range s.messageAttributes {
@@ -52,7 +52,7 @@ func newSQSClient(awsSQS sqsiface.SQSAPI, opts *options) *sqsClient {
 	}
 }
 
-func (s *sqsClient) sendMessage(queueName *string, event *sqsEvent) error {
+func (s *sqsClient) sendMessage(queueName *string, event *sqsSendEvent) error {
 	if len(event.messageAttributes) > maxNumberOfAttributes {
 		return ErrorMaxNumberOfAttributesExceeded
 	}
@@ -91,7 +91,7 @@ func (s *sqsClient) sendMessageBatch(queueName *string, entries []*sqs.SendMessa
 	return s.awsSQS.SendMessageBatch(sbo)
 }
 
-func (s *sqsClient) bacthRequestEntry(event *sqsEvent) (*sqs.SendMessageBatchRequestEntry, error) {
+func (s *sqsClient) bacthRequestEntry(event *sqsSendEvent) (*sqs.SendMessageBatchRequestEntry, error) {
 	if len(event.messageAttributes) > maxNumberOfAttributes {
 		return nil, ErrorMaxNumberOfAttributesExceeded
 	}

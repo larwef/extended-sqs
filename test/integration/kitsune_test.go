@@ -380,3 +380,40 @@ func TestBatch_SendReceiveAndDeleteBatch(t *testing.T) {
 		test.AssertNotError(t, err)
 	}
 }
+
+func TestBatch_SendReceiveAndDeleteBatch_WithKMSAndS3(t *testing.T) {
+	sqsClient := getClient(t, kitsune.S3Bucket(testBucket), kitsune.KMSKeyID(testKMSKey))
+
+	payload, err := ioutil.ReadFile("../testdata/size262145Bytes.txt")
+	test.AssertNotError(t, err)
+
+	batch := sqsClient.NewBatch()
+	for i := 0; i < 10; i++ {
+		if i%2 == 0 {
+			n, err := batch.Add(payload, strconv.Itoa(i), nil)
+			test.AssertNotError(t, err)
+			test.AssertEqual(t, n, i+1)
+		} else {
+			n, err := batch.Add([]byte("TestPayload"+strconv.Itoa(i)), strconv.Itoa(i), nil)
+			test.AssertNotError(t, err)
+			test.AssertEqual(t, n, i+1)
+		}
+	}
+
+	output, err := batch.Send(&testQueueName)
+	test.AssertNotError(t, err)
+	test.AssertEqual(t, len(output.Successful), 10)
+	test.AssertEqual(t, len(output.Failed), 0)
+
+	var messages []*sqs.Message
+	for len(messages) < 10 {
+		msgs, err := sqsClient.ReceiveMessage(&testQueueName)
+		test.AssertNotError(t, err)
+		messages = append(messages, msgs...)
+	}
+
+	for _, message := range messages {
+		err := sqsClient.DeleteMessage(&testQueueName, message.ReceiptHandle)
+		test.AssertNotError(t, err)
+	}
+}
