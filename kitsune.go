@@ -68,7 +68,7 @@ var defaultClientOptions = options{
 	backoffFactor:               2,
 	maxVisibilityTimeout:        900,
 	waitTimeSeconds:             20,
-	attributeNames:              []*string{aws.String("ApproximateReceiveCount")},
+	attributeNames:              []*string{aws.String(sqs.MessageSystemAttributeNameApproximateReceiveCount)},
 	messageAttributeNames:       []*string{aws.String(AttributeNameS3Bucket), aws.String(AttributeNameKMSKey), aws.String(AttributeCompression)},
 	forceS3:                     false,
 	compressionEnabled:          false,
