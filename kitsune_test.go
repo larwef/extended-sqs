@@ -548,6 +548,34 @@ func TestBatch_Send(t *testing.T) {
 	test.AssertNotError(t, err)
 }
 
+func TestBatch_Send_WithClientError(t *testing.T) {
+	payload, err := ioutil.ReadFile("test/testdata/size262145Bytes.txt")
+	test.AssertNotError(t, err)
+
+	sqsMock := test.NewSQSMock(5, int64(20))
+	sqsClient := getClient(sqsMock, nil, nil)
+	testQueue := "test-queue"
+	sqsMock.CreateQueueIfNotExists(&testQueue)
+
+	batch := sqsClient.NewBatch()
+	for i := 0; i < 10; i++ {
+		if i%2 == 0 {
+			_, err := batch.Add(payload, strconv.Itoa(i), nil)
+			test.AssertNotError(t, err)
+		} else {
+			_, err := batch.Add([]byte("TestPayload"+strconv.Itoa(i)), strconv.Itoa(i), nil)
+			test.AssertNotError(t, err)
+		}
+	}
+
+	batchOutput, err := batch.Send(&testQueue)
+	test.AssertNotError(t, err)
+	test.AssertEqual(t, len(batchOutput.Failed), 5)
+
+	_, err = sqsMock.WaitUntilMessagesReceived(&testQueue, 5)
+	test.AssertNotError(t, err)
+}
+
 func TestBatch_SendKMSAndS3(t *testing.T) {
 	payload, err := ioutil.ReadFile("test/testdata/size262145Bytes.txt")
 	test.AssertNotError(t, err)
