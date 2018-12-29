@@ -177,3 +177,12 @@ func (s *sqsClient) getQueueURL(queueName *string) (*string, error) {
 
 	return output.QueueUrl, err
 }
+
+func getBatchResultError(id *string, err error) *sqs.BatchResultErrorEntry {
+	return &sqs.BatchResultErrorEntry{
+		Code:        aws.String("custom"), // TODO: Find out what codes are actually used
+		Id:          id,
+		Message:     aws.String(fmt.Sprintf("client error when sending batch: %v\n", err)),
+		SenderFault: aws.Bool(true),
+	}
+}

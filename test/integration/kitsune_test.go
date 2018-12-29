@@ -355,14 +355,14 @@ func TestClient_SendReceiveAndDeleteSingleMessage_CompressionEnabled(t *testing.
 func TestBatch_SendReceiveAndDeleteBatch(t *testing.T) {
 	sqsClient := getClient(t)
 
-	batch := sqsClient.NewBatch()
+	batch := kitsune.NewBatch()
 	for i := 0; i < 10; i++ {
 		n, err := batch.Add([]byte("TestPayload"), strconv.Itoa(i), nil)
 		test.AssertNotError(t, err)
 		test.AssertEqual(t, n, i+1)
 	}
 
-	output, err := batch.Send(&testQueueName)
+	output, err := sqsClient.SendMessageBatch(&testQueueName, batch)
 	test.AssertNotError(t, err)
 	test.AssertEqual(t, len(output.Successful), 10)
 	test.AssertEqual(t, len(output.Failed), 0)
@@ -387,7 +387,7 @@ func TestBatch_SendReceiveAndDeleteBatch_WithKMSAndS3(t *testing.T) {
 	payload, err := ioutil.ReadFile("../testdata/size262145Bytes.txt")
 	test.AssertNotError(t, err)
 
-	batch := sqsClient.NewBatch()
+	batch := kitsune.NewBatch()
 	for i := 0; i < 10; i++ {
 		if i%2 == 0 {
 			n, err := batch.Add(payload, strconv.Itoa(i), nil)
@@ -400,7 +400,7 @@ func TestBatch_SendReceiveAndDeleteBatch_WithKMSAndS3(t *testing.T) {
 		}
 	}
 
-	output, err := batch.Send(&testQueueName)
+	output, err := sqsClient.SendMessageBatch(&testQueueName, batch)
 	test.AssertNotError(t, err)
 	test.AssertEqual(t, len(output.Successful), 10)
 	test.AssertEqual(t, len(output.Failed), 0)

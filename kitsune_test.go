@@ -240,6 +240,93 @@ func TestClient_SendMessageWithAttributes_MaxNoOfAttributesExceeded(t *testing.T
 	test.AssertEqual(t, err, ErrorMaxNumberOfAttributesExceeded)
 }
 
+func TestClient_SendMessageBatch(t *testing.T) {
+	sqsMock := test.NewSQSMock(5, int64(20))
+	sqsClient := getClient(sqsMock, nil, nil)
+	testQueue := "test-queue"
+	sqsMock.CreateQueueIfNotExists(&testQueue)
+
+	batch := NewBatch()
+	for i := 0; i < 10; i++ {
+		n, err := batch.Add([]byte("TestPayload"+strconv.Itoa(i)), strconv.Itoa(i), nil)
+		test.AssertNotError(t, err)
+		test.AssertEqual(t, n, i+1)
+	}
+
+	_, err := sqsClient.SendMessageBatch(&testQueue, batch)
+	test.AssertNotError(t, err)
+
+	_, err = sqsMock.WaitUntilMessagesReceived(&testQueue, 10)
+	test.AssertNotError(t, err)
+}
+
+func TestClient_SendMessageBatch_WithClientError(t *testing.T) {
+	payload, err := ioutil.ReadFile("test/testdata/size262145Bytes.txt")
+	test.AssertNotError(t, err)
+
+	sqsMock := test.NewSQSMock(5, int64(20))
+	sqsClient := getClient(sqsMock, nil, nil)
+	testQueue := "test-queue"
+	sqsMock.CreateQueueIfNotExists(&testQueue)
+
+	batch := NewBatch()
+	for i := 0; i < 10; i++ {
+		if i%2 == 0 {
+			_, err := batch.Add(payload, strconv.Itoa(i), nil)
+			test.AssertNotError(t, err)
+		} else {
+			_, err := batch.Add([]byte("TestPayload"+strconv.Itoa(i)), strconv.Itoa(i), nil)
+			test.AssertNotError(t, err)
+		}
+	}
+
+	batchOutput, err := sqsClient.SendMessageBatch(&testQueue, batch)
+	test.AssertNotError(t, err)
+	test.AssertEqual(t, len(batchOutput.Failed), 5)
+
+	_, err = sqsMock.WaitUntilMessagesReceived(&testQueue, 5)
+	test.AssertNotError(t, err)
+}
+
+func TestClient_SendMessageBatch_WithKMSAndS3(t *testing.T) {
+	payload, err := ioutil.ReadFile("test/testdata/size262145Bytes.txt")
+	test.AssertNotError(t, err)
+
+	s3Mock := &test.S3Mock{}
+	s3Mock.PutObjectHandler = func(input *s3.PutObjectInput) (*s3.PutObjectOutput, error) {
+		return &s3.PutObjectOutput{}, nil
+	}
+
+	kmsMock := &test.KmsMock{}
+
+	sqsMock := test.NewSQSMock(5, int64(20))
+	sqsClient := getClient(sqsMock, s3Mock, kmsMock, S3Bucket("test-bucket"), KMSKeyID("keyID"), KMSKeyCacheEnabled(true))
+	testQueue := "test-queue"
+	sqsMock.CreateQueueIfNotExists(&testQueue)
+
+	batch := NewBatch()
+	for i := 0; i < 10; i++ {
+		if i%2 == 0 {
+			n, err := batch.Add(payload, strconv.Itoa(i), nil)
+			test.AssertNotError(t, err)
+			test.AssertEqual(t, n, i+1)
+		} else {
+			n, err := batch.Add([]byte("TestPayload"+strconv.Itoa(i)), strconv.Itoa(i), nil)
+			test.AssertNotError(t, err)
+			test.AssertEqual(t, n, i+1)
+		}
+	}
+
+	_, err = sqsClient.SendMessageBatch(&testQueue, batch)
+	test.AssertNotError(t, err)
+
+	_, err = sqsMock.WaitUntilMessagesReceived(&testQueue, 10)
+	test.AssertNotError(t, err)
+
+	test.AssertEqual(t, s3Mock.PutObjectHandlerCalledCount, 5)
+	test.AssertEqual(t, kmsMock.GenerateDataKeyCalledCount, 1)
+}
+
 func TestClient_ReceiveMessage(t *testing.T) {
 	for i := 1; i <= 100; i++ {
 		receiveNMessages(t, i)
@@ -528,98 +615,8 @@ func TestClient_ReceiveMessage_Compressed(t *testing.T) {
 	test.AssertEqual(t, *messages[0].Body, "TestPayload")
 }
 
-func TestBatch_Send(t *testing.T) {
-	sqsMock := test.NewSQSMock(5, int64(20))
-	sqsClient := getClient(sqsMock, nil, nil)
-	testQueue := "test-queue"
-	sqsMock.CreateQueueIfNotExists(&testQueue)
-
-	batch := sqsClient.NewBatch()
-	for i := 0; i < 10; i++ {
-		n, err := batch.Add([]byte("TestPayload"+strconv.Itoa(i)), strconv.Itoa(i), nil)
-		test.AssertNotError(t, err)
-		test.AssertEqual(t, n, i+1)
-	}
-
-	_, err := batch.Send(&testQueue)
-	test.AssertNotError(t, err)
-
-	_, err = sqsMock.WaitUntilMessagesReceived(&testQueue, 10)
-	test.AssertNotError(t, err)
-}
-
-func TestBatch_Send_WithClientError(t *testing.T) {
-	payload, err := ioutil.ReadFile("test/testdata/size262145Bytes.txt")
-	test.AssertNotError(t, err)
-
-	sqsMock := test.NewSQSMock(5, int64(20))
-	sqsClient := getClient(sqsMock, nil, nil)
-	testQueue := "test-queue"
-	sqsMock.CreateQueueIfNotExists(&testQueue)
-
-	batch := sqsClient.NewBatch()
-	for i := 0; i < 10; i++ {
-		if i%2 == 0 {
-			_, err := batch.Add(payload, strconv.Itoa(i), nil)
-			test.AssertNotError(t, err)
-		} else {
-			_, err := batch.Add([]byte("TestPayload"+strconv.Itoa(i)), strconv.Itoa(i), nil)
-			test.AssertNotError(t, err)
-		}
-	}
-
-	batchOutput, err := batch.Send(&testQueue)
-	test.AssertNotError(t, err)
-	test.AssertEqual(t, len(batchOutput.Failed), 5)
-
-	_, err = sqsMock.WaitUntilMessagesReceived(&testQueue, 5)
-	test.AssertNotError(t, err)
-}
-
-func TestBatch_SendKMSAndS3(t *testing.T) {
-	payload, err := ioutil.ReadFile("test/testdata/size262145Bytes.txt")
-	test.AssertNotError(t, err)
-
-	s3Mock := &test.S3Mock{}
-	s3Mock.PutObjectHandler = func(input *s3.PutObjectInput) (*s3.PutObjectOutput, error) {
-		return &s3.PutObjectOutput{}, nil
-	}
-
-	kmsMock := &test.KmsMock{}
-
-	sqsMock := test.NewSQSMock(5, int64(20))
-	sqsClient := getClient(sqsMock, s3Mock, kmsMock, S3Bucket("test-bucket"), KMSKeyID("keyID"), KMSKeyCacheEnabled(true))
-	testQueue := "test-queue"
-	sqsMock.CreateQueueIfNotExists(&testQueue)
-
-	batch := sqsClient.NewBatch()
-	for i := 0; i < 10; i++ {
-		if i%2 == 0 {
-			n, err := batch.Add(payload, strconv.Itoa(i), nil)
-			test.AssertNotError(t, err)
-			test.AssertEqual(t, n, i+1)
-		} else {
-			n, err := batch.Add([]byte("TestPayload"+strconv.Itoa(i)), strconv.Itoa(i), nil)
-			test.AssertNotError(t, err)
-			test.AssertEqual(t, n, i+1)
-		}
-	}
-
-	_, err = batch.Send(&testQueue)
-	test.AssertNotError(t, err)
-
-	_, err = sqsMock.WaitUntilMessagesReceived(&testQueue, 10)
-	test.AssertNotError(t, err)
-
-	test.AssertEqual(t, s3Mock.PutObjectHandlerCalledCount, 5)
-	test.AssertEqual(t, kmsMock.GenerateDataKeyCalledCount, 1)
-}
-
 func TestBatch_Add_MaxBatchSizeExceeded(t *testing.T) {
-	sqsMock := test.NewSQSMock(5, int64(20))
-	sqsClient := getClient(sqsMock, nil, nil)
-
-	batch := sqsClient.NewBatch()
+	batch := NewBatch()
 	for i := 0; i < 10; i++ {
 		n, err := batch.Add([]byte("TestPayload"), strconv.Itoa(i), nil)
 		test.AssertNotError(t, err)
@@ -631,10 +628,7 @@ func TestBatch_Add_MaxBatchSizeExceeded(t *testing.T) {
 }
 
 func TestBatch_Add_DuplicateIdError(t *testing.T) {
-	sqsMock := test.NewSQSMock(5, int64(20))
-	sqsClient := getClient(sqsMock, nil, nil)
-
-	batch := sqsClient.NewBatch()
+	batch := NewBatch()
 	_, err := batch.Add([]byte("TestPayload"), "someId", nil)
 	test.AssertNotError(t, err)
 	_, err = batch.Add([]byte("TestPayload"), "someId", nil)
