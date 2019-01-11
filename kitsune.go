@@ -371,12 +371,33 @@ func compressData(payload []byte) ([]byte, error) {
 	return encoded, nil
 }
 
-// ReceiveMessage polls the specified queue and returns the fetched messages. If the S3 bucket attribute is set, the payload is
+// ReceiveSuccessfulEntry represents a sucessfully received SQS message
+type ReceiveSuccessfulEntry struct {
+	Message *sqs.Message
+}
+
+// ReceiveFailedEntry represents a received SQS message which failed when decompressing, decrypting or retrieving from S3.
+type ReceiveFailedEntry struct {
+	Message *sqs.Message
+	Error   error
+}
+
+// ReceiveMessagesResult is used to collect the results of a batch receive
+type ReceiveMessagesResult struct {
+	Successful []*ReceiveSuccessfulEntry
+	Failed     []*ReceiveFailedEntry
+}
+
+// ReceiveMessages polls the specified queue and returns the fetched messages. If the S3 bucket attribute is set, the payload is
 // fetched and replaces the file event in the sqs.Message body. This will not delete the object in S3. A lifecycle rule is
 // recomended.
-// TODO: Currently the function will return an error if one of the messages fail when fetching from S3 or when decrypting. Consider putting the failing messages back on the queue or handling them some other way.
-func (c *Client) ReceiveMessage(queueName *string) ([]*sqs.Message, error) {
+func (c *Client) ReceiveMessages(queueName *string) (*ReceiveMessagesResult, error) {
 	messages, err := c.awsSQSClient.receiveMessage(queueName)
+	if err != nil {
+		return nil, err
+	}
+
+	result := &ReceiveMessagesResult{}
 
 	// Loop through messages and check if payload is located in S3 and/or if its encrypted.
 	for _, message := range messages {
@@ -384,14 +405,22 @@ func (c *Client) ReceiveMessage(queueName *string) ([]*sqs.Message, error) {
 		if _, exists := message.MessageAttributes[AttributeNameS3Bucket]; exists && c.awsS3Client != nil {
 			var fe fileEvent
 			if err := json.Unmarshal([]byte(*message.Body), &fe); err != nil {
-				return nil, err
+				result.Failed = append(result.Failed, &ReceiveFailedEntry{
+					Message: message,
+					Error:   err,
+				})
+				continue
 			}
 
 			if payload, err := c.awsS3Client.getObject(&fe); err == nil {
 				message.Body = aws.String(string(payload))
 				delete(message.MessageAttributes, AttributeNameS3Bucket)
 			} else {
-				return nil, err
+				result.Failed = append(result.Failed, &ReceiveFailedEntry{
+					Message: message,
+					Error:   err,
+				})
+				continue
 			}
 		}
 
@@ -399,7 +428,11 @@ func (c *Client) ReceiveMessage(queueName *string) ([]*sqs.Message, error) {
 		if _, exists := message.MessageAttributes[AttributeNameKMSKey]; exists && c.awsKMSClient != nil {
 			var ee encryptedEvent
 			if err := json.Unmarshal([]byte(*message.Body), &ee); err != nil {
-				return nil, err
+				result.Failed = append(result.Failed, &ReceiveFailedEntry{
+					Message: message,
+					Error:   err,
+				})
+				continue
 			}
 
 			if decrypted, err := c.awsKMSClient.decrypt(&ee); err == nil {
@@ -407,7 +440,11 @@ func (c *Client) ReceiveMessage(queueName *string) ([]*sqs.Message, error) {
 				message.Body = &decryptedStr
 				delete(message.MessageAttributes, AttributeNameKMSKey)
 			} else {
-				return nil, err
+				result.Failed = append(result.Failed, &ReceiveFailedEntry{
+					Message: message,
+					Error:   err,
+				})
+				continue
 			}
 		}
 
@@ -418,12 +455,20 @@ func (c *Client) ReceiveMessage(queueName *string) ([]*sqs.Message, error) {
 				message.Body = aws.String(string(decompressed))
 				delete(message.MessageAttributes, AttributeCompression)
 			} else {
-				return nil, err
+				result.Failed = append(result.Failed, &ReceiveFailedEntry{
+					Message: message,
+					Error:   err,
+				})
+				continue
 			}
 		}
+
+		result.Successful = append(result.Successful, &ReceiveSuccessfulEntry{
+			Message: message,
+		})
 	}
 
-	return messages, err
+	return result, nil
 }
 
 func decompressData(payload []byte) ([]byte, error) {
