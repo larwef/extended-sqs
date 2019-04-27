@@ -1,3 +1,5 @@
+VERSION=v0.0.1
+
 all: test
 
 # PHONY used to mitigate conflict with dir name test
@@ -17,6 +19,10 @@ coverage:
 	go test ./... -coverprofile=coverage.out
 	go tool cover -func=coverage.out
 	go tool cover -html=coverage.out
+
+release: test
+	git tag -a $(VERSION) -m "Release $(VERSION)"
+	git push origin $(VERSION)
 
 doc:
 	godoc -http=":6060"
