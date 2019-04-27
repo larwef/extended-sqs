@@ -52,7 +52,7 @@ func sendNMessages(t *testing.T, n int) {
 	test.AssertNotError(t, err)
 
 	for i := 0; i < n; i++ {
-		test.AssertEqual(t, *messages[i].Body, "Testpayloadd"+strconv.Itoa(i))
+		test.AssertEqual(t, *messages[i].Body, "Testpayload"+strconv.Itoa(i))
 	}
 }
 
