@@ -9,4 +9,5 @@ env:
     - GO111MODULE=on
 
 script:
-- make test
+- go vet ./...
+- go test ./...
