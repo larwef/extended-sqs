@@ -1,3 +1,6 @@
+[![Build Status](https://travis-ci.org/larwef/kitsune.svg?branch=master)](https://travis-ci.org/larwef/kitsune)
+[![Go Report Card](https://goreportcard.com/badge/github.com/larwef/kitsune)](https://goreportcard.com/report/github.com/larwef/kitsune)
+
 # Kitsune SQS Client
 Go client for Amazon Simple Queue Service with support for messages larger than the max size of an SQS message by saving to S3 and
 encryption using Key Management Service.
