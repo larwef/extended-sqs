@@ -158,6 +158,7 @@ func TestClient_SendMessage_OverMaxSize(t *testing.T) {
 
 	test.AssertEqual(t, s3Mock.PutObjectHandlerCalledCount, 1)
 	message, err := sqsMock.WaitUntilMessagesReceived(&testQueue, 1)
+	test.AssertNotError(t, err)
 
 	test.AssertEqual(t, *message[0].MessageAttributes[AttributeNameS3Bucket].StringValue, "test-bucket")
 
@@ -201,6 +202,7 @@ func TestClient_SendMessageWithAttributes_OverMaxSize(t *testing.T) {
 
 	test.AssertEqual(t, s3Mock.PutObjectHandlerCalledCount, 1)
 	message, err := sqsMock.WaitUntilMessagesReceived(&testQueue, 1)
+	test.AssertNotError(t, err)
 
 	test.AssertEqual(t, *message[0].MessageAttributes[AttributeNameS3Bucket].StringValue, "test-bucket")
 
@@ -436,6 +438,7 @@ func TestClient_SendMessage_KMS(t *testing.T) {
 
 	var ee encryptedEvent
 	err = json.Unmarshal([]byte(*message[0].Body), &ee)
+	test.AssertNotError(t, err)
 
 	data, err := test.DecryptData(ee.Payload)
 	test.AssertNotError(t, err)
