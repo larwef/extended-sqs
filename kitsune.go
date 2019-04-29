@@ -101,7 +101,7 @@ func MaxVisibilityTimeout(m int64) ClientOption {
 	return func(o *options) { o.maxVisibilityTimeout = m }
 }
 
-// BackoffFactor sets the backoff factor which is a paramter used by the backoff function.
+// BackoffFactor sets the backoff factor which is a parameter used by the backoff function.
 func BackoffFactor(b int64) ClientOption {
 	return func(o *options) { o.backoffFactor = b }
 }
@@ -335,7 +335,7 @@ func (c *Client) encrypt(s *sqsSendEvent) error {
 func (c *Client) uploadToS3(s *sqsSendEvent) error {
 	fileEvent, err := c.awsS3Client.putObject(&c.opts.s3Bucket, s.payload)
 	if err != nil {
-		return fmt.Errorf("error puting object to S3: %v", err)
+		return fmt.Errorf("error putting object to S3: %v", err)
 	}
 
 	fileEventBytes, err := json.Marshal(&fileEvent)
@@ -371,7 +371,7 @@ func compressData(payload []byte) ([]byte, error) {
 	return encoded, nil
 }
 
-// ReceiveSuccessfulEntry represents a sucessfully received SQS message
+// ReceiveSuccessfulEntry represents a successfully received SQS message
 type ReceiveSuccessfulEntry struct {
 	Message *sqs.Message
 }
@@ -390,7 +390,7 @@ type ReceiveMessagesResult struct {
 
 // ReceiveMessages polls the specified queue and returns the fetched messages. If the S3 bucket attribute is set, the payload is
 // fetched and replaces the file event in the sqs.Message body. This will not delete the object in S3. A lifecycle rule is
-// recomended.
+// recommended.
 func (c *Client) ReceiveMessages(queueName *string) (*ReceiveMessagesResult, error) {
 	messages, err := c.awsSQSClient.receiveMessage(queueName)
 	if err != nil {
@@ -496,7 +496,7 @@ func decompressData(payload []byte) ([]byte, error) {
 	return decompressedBytes, nil
 }
 
-// ChangeMessageVisibility changes the visibilty of a message. Essentialy putting it back in the queue and unavailable for a
+// ChangeMessageVisibility changes the visibilty of a message. Essentially putting it back in the queue and unavailable for a
 // specified amount of time.
 func (c *Client) ChangeMessageVisibility(queueName *string, message *sqs.Message, timeout int64) error {
 	return c.awsSQSClient.changeMessageVisibility(queueName, message, timeout)
