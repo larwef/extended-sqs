@@ -21,22 +21,6 @@ var ErrorMaxMessageSizeExceeded = fmt.Errorf("maximum message size of %d bytes e
 // ErrorMaxNumberOfAttributesExceeded is returned when the number of attributes exceeds maxNumberOfAttributes.
 var ErrorMaxNumberOfAttributesExceeded = fmt.Errorf("maximum number of attributes of %d exceeded", maxNumberOfAttributes)
 
-type sqsSendEvent struct {
-	payload           []byte
-	messageAttributes map[string]*sqs.MessageAttributeValue
-	id                string
-}
-
-func (s *sqsSendEvent) size() int {
-	size := len(s.payload)
-
-	for key, value := range s.messageAttributes {
-		size += len(key) + len(*value.DataType) + len(*value.StringValue)
-	}
-
-	return size
-}
-
 func size(payload []byte, messageAttributes map[string]*sqs.MessageAttributeValue) int {
 	size := len(payload)
 
@@ -99,23 +83,6 @@ func (s *sqsClient) sendMessageBatch(queueName *string, entries []*sqs.SendMessa
 	}
 
 	return s.awsSQS.SendMessageBatch(sbo)
-}
-
-func (s *sqsClient) bacthRequestEntry(event *sqsSendEvent) (*sqs.SendMessageBatchRequestEntry, error) {
-	if len(event.messageAttributes) > maxNumberOfAttributes {
-		return nil, ErrorMaxNumberOfAttributesExceeded
-	}
-
-	if event.size() > maxMessageSize {
-		return nil, ErrorMaxMessageSizeExceeded
-	}
-
-	return &sqs.SendMessageBatchRequestEntry{
-		DelaySeconds:      &s.opts.delaySeconds,
-		Id:                &event.id,
-		MessageAttributes: event.messageAttributes,
-		MessageBody:       aws.String(string(event.payload)),
-	}, nil
 }
 
 func (s *sqsClient) receiveMessage(queueName *string) ([]*sqs.Message, error) {
@@ -184,14 +151,4 @@ func (s *sqsClient) getQueueURL(queueName *string) (*string, error) {
 	}
 
 	return output.QueueUrl, err
-}
-
-func getBatchResultError(id *string, err error) *sqs.BatchResultErrorEntry {
-	return &sqs.BatchResultErrorEntry{
-		// Cant find any documentation on what the codes used are, so just putting something thats obviously not from AWS
-		Code:        aws.String("custom"),
-		Id:          id,
-		Message:     aws.String(fmt.Sprintf("client error when sending batch: %v\n", err)),
-		SenderFault: aws.Bool(true),
-	}
 }

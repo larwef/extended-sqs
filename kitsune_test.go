@@ -264,18 +264,18 @@ func receiveNMessages(t *testing.T, n int) {
 		test.AssertNotError(t, err)
 	}
 
-	var messages []*ReceiveSuccessfulEntry
+	var messages []*sqs.Message
 	for {
 		msges, err := sqsClient.ReceiveMessages(&testQueue)
 		test.AssertNotError(t, err)
-		if len(msges.Successful) == 0 {
+		if len(msges) == 0 {
 			break
 		}
-		messages = append(messages, msges.Successful...)
+		messages = append(messages, msges...)
 	}
 
 	for i, elem := range messages {
-		test.AssertEqual(t, *elem.Message.Body, "Testpayload"+strconv.Itoa(i))
+		test.AssertEqual(t, *elem.Body, "Testpayload"+strconv.Itoa(i))
 	}
 	test.AssertEqual(t, len(messages), n)
 }
@@ -330,7 +330,7 @@ func TestClient_ReceiveMessage_FileEvent(t *testing.T) {
 	// the queue.
 	messages, err := sqsClient.ReceiveMessages(&testQueue)
 	test.AssertNotError(t, err)
-	test.AssertEqual(t, *messages.Successful[0].Message.Body, string(payload))
+	test.AssertEqual(t, *messages[0].Body, string(payload))
 }
 
 func TestClient_SendMessage_KMS(t *testing.T) {
@@ -392,7 +392,7 @@ func TestClient_ReceiveMessage_KMS(t *testing.T) {
 
 	messages, err := sqsClient.ReceiveMessages(&testQueue)
 	test.AssertNotError(t, err)
-	test.AssertEqual(t, *messages.Successful[0].Message.Body, "TestPayload")
+	test.AssertEqual(t, *messages[0].Body, "TestPayload")
 }
 
 func TestClient_SendMessage_WithKMSCache(t *testing.T) {
@@ -450,7 +450,7 @@ func TestClient_ReceiveMessage_WithKMSCache(t *testing.T) {
 
 	messages, err := sqsClient.ReceiveMessages(&testQueue)
 	test.AssertNotError(t, err)
-	test.AssertEqual(t, len(messages.Successful), 5)
+	test.AssertEqual(t, len(messages), 5)
 	test.AssertEqual(t, kmsMock.DecryptCalledCount, 1)
 }
 
@@ -471,12 +471,12 @@ func TestClient_SendAndReceiveMessage_WithKMSCache(t *testing.T) {
 
 	messages, err := sqsClient.ReceiveMessages(&testQueue)
 	test.AssertNotError(t, err)
-	test.AssertEqual(t, len(messages.Successful), 5)
-	test.AssertEqual(t, *messages.Successful[0].Message.Body, "TestPayload0")
-	test.AssertEqual(t, *messages.Successful[1].Message.Body, "TestPayload1")
-	test.AssertEqual(t, *messages.Successful[2].Message.Body, "TestPayload2")
-	test.AssertEqual(t, *messages.Successful[3].Message.Body, "TestPayload3")
-	test.AssertEqual(t, *messages.Successful[4].Message.Body, "TestPayload4")
+	test.AssertEqual(t, len(messages), 5)
+	test.AssertEqual(t, *messages[0].Body, "TestPayload0")
+	test.AssertEqual(t, *messages[1].Body, "TestPayload1")
+	test.AssertEqual(t, *messages[2].Body, "TestPayload2")
+	test.AssertEqual(t, *messages[3].Body, "TestPayload3")
+	test.AssertEqual(t, *messages[4].Body, "TestPayload4")
 
 	test.AssertEqual(t, kmsMock.DecryptCalledCount, 0)
 
@@ -528,5 +528,5 @@ func TestClient_ReceiveMessage_Compressed(t *testing.T) {
 
 	messages, err := sqsClient.ReceiveMessages(&testQueue)
 	test.AssertNotError(t, err)
-	test.AssertEqual(t, *messages.Successful[0].Message.Body, "TestPayload")
+	test.AssertEqual(t, *messages[0].Body, "TestPayload")
 }

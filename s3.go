@@ -25,7 +25,6 @@ func newS3Client(awsS3 s3iface.S3API) *s3Client {
 	}
 }
 
-// TODO: Consider another naming convention for files
 func (s *s3Client) putObject(bucket *string, payload []byte) (*fileEvent, error) {
 	key := uuid.New().String()
 	poi := &s3.PutObjectInput{

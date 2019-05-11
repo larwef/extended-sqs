@@ -258,6 +258,25 @@ func (c *Client) SendMessageWithAttributes(queueName *string, payload []byte, me
 	return c.awsSQSClient.sendMessage(queueName, payld, messageAttributes)
 }
 
+// The compressed string is base64 encoded because the compressed data might contain characters that are invalid and SQS would
+// throw an error
+func compressData(payload []byte) ([]byte, error) {
+	var buf bytes.Buffer
+	zw := gzip.NewWriter(&buf)
+
+	if _, err := zw.Write(payload); err != nil {
+		return nil, err
+	}
+
+	if err := zw.Close(); err != nil {
+		return nil, err
+	}
+
+	encoded := make([]byte, base64.StdEncoding.EncodedLen(len(buf.Bytes())))
+	base64.StdEncoding.Encode(encoded, buf.Bytes())
+	return encoded, nil
+}
+
 func (c *Client) encrypt(payload []byte) ([]byte, error) {
 	encryptedEvent, err := c.awsKMSClient.encrypt(&c.opts.kmsKeyID, payload)
 	if err != nil {
@@ -286,52 +305,14 @@ func (c *Client) uploadToS3(payload []byte) ([]byte, error) {
 	return fileEventBytes, err
 }
 
-// The compressed string is base64 encoded because the compressed data might contain characters that are invalid and SQS would
-// throw an error
-func compressData(payload []byte) ([]byte, error) {
-	var buf bytes.Buffer
-	zw := gzip.NewWriter(&buf)
-
-	if _, err := zw.Write(payload); err != nil {
-		return nil, err
-	}
-
-	if err := zw.Close(); err != nil {
-		return nil, err
-	}
-
-	encoded := make([]byte, base64.StdEncoding.EncodedLen(len(buf.Bytes())))
-	base64.StdEncoding.Encode(encoded, buf.Bytes())
-	return encoded, nil
-}
-
-// ReceiveSuccessfulEntry represents a successfully received SQS message
-type ReceiveSuccessfulEntry struct {
-	Message *sqs.Message
-}
-
-// ReceiveFailedEntry represents a received SQS message which failed when decompressing, decrypting or retrieving from S3.
-type ReceiveFailedEntry struct {
-	Message *sqs.Message
-	Error   error
-}
-
-// ReceiveMessagesResult is used to collect the results of a batch receive
-type ReceiveMessagesResult struct {
-	Successful []*ReceiveSuccessfulEntry
-	Failed     []*ReceiveFailedEntry
-}
-
 // ReceiveMessages polls the specified queue and returns the fetched messages. If the S3 bucket attribute is set, the payload is
 // fetched and replaces the file event in the sqs.Message body. This will not delete the object in S3. A lifecycle rule is
 // recommended.
-func (c *Client) ReceiveMessages(queueName *string) (*ReceiveMessagesResult, error) {
+func (c *Client) ReceiveMessages(queueName *string) ([]*sqs.Message, error) {
 	messages, err := c.awsSQSClient.receiveMessage(queueName)
 	if err != nil {
 		return nil, err
 	}
-
-	result := &ReceiveMessagesResult{}
 
 	// Loop through messages and check if payload is located in S3 and/or if its encrypted.
 	for _, message := range messages {
@@ -339,22 +320,14 @@ func (c *Client) ReceiveMessages(queueName *string) (*ReceiveMessagesResult, err
 		if _, exists := message.MessageAttributes[AttributeNameS3Bucket]; exists && c.awsS3Client != nil {
 			var fe fileEvent
 			if err := json.Unmarshal([]byte(*message.Body), &fe); err != nil {
-				result.Failed = append(result.Failed, &ReceiveFailedEntry{
-					Message: message,
-					Error:   err,
-				})
-				continue
+				return nil, err
 			}
 
 			if payload, err := c.awsS3Client.getObject(&fe); err == nil {
 				message.Body = aws.String(string(payload))
 				delete(message.MessageAttributes, AttributeNameS3Bucket)
 			} else {
-				result.Failed = append(result.Failed, &ReceiveFailedEntry{
-					Message: message,
-					Error:   err,
-				})
-				continue
+				return nil, err
 			}
 		}
 
@@ -362,11 +335,7 @@ func (c *Client) ReceiveMessages(queueName *string) (*ReceiveMessagesResult, err
 		if _, exists := message.MessageAttributes[AttributeNameKMSKey]; exists && c.awsKMSClient != nil {
 			var ee encryptedEvent
 			if err := json.Unmarshal([]byte(*message.Body), &ee); err != nil {
-				result.Failed = append(result.Failed, &ReceiveFailedEntry{
-					Message: message,
-					Error:   err,
-				})
-				continue
+				return nil, err
 			}
 
 			if decrypted, err := c.awsKMSClient.decrypt(&ee); err == nil {
@@ -374,11 +343,7 @@ func (c *Client) ReceiveMessages(queueName *string) (*ReceiveMessagesResult, err
 				message.Body = &decryptedStr
 				delete(message.MessageAttributes, AttributeNameKMSKey)
 			} else {
-				result.Failed = append(result.Failed, &ReceiveFailedEntry{
-					Message: message,
-					Error:   err,
-				})
-				continue
+				return nil, err
 			}
 		}
 
@@ -389,20 +354,12 @@ func (c *Client) ReceiveMessages(queueName *string) (*ReceiveMessagesResult, err
 				message.Body = aws.String(string(decompressed))
 				delete(message.MessageAttributes, AttributeCompression)
 			} else {
-				result.Failed = append(result.Failed, &ReceiveFailedEntry{
-					Message: message,
-					Error:   err,
-				})
-				continue
+				return nil, err
 			}
 		}
-
-		result.Successful = append(result.Successful, &ReceiveSuccessfulEntry{
-			Message: message,
-		})
 	}
 
-	return result, nil
+	return messages, nil
 }
 
 func decompressData(payload []byte) ([]byte, error) {
