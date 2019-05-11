@@ -10,7 +10,6 @@ import (
 	"github.com/larwef/kitsune"
 	"github.com/larwef/kitsune/test"
 	"io/ioutil"
-	"strconv"
 	"testing"
 )
 
@@ -349,70 +348,4 @@ func TestClient_SendReceiveAndDeleteSingleMessage_CompressionEnabled(t *testing.
 	}
 
 	t.Logf("Message with recept: %s deleted from SQS Queue", *messages.Successful[0].Message.ReceiptHandle)
-}
-
-func TestBatch_SendReceiveAndDeleteBatch(t *testing.T) {
-	sqsClient := getClient(t)
-
-	batch := kitsune.NewBatch()
-	for i := 0; i < 10; i++ {
-		n, err := batch.Add([]byte("TestPayload"), strconv.Itoa(i), nil)
-		test.AssertNotError(t, err)
-		test.AssertEqual(t, n, i+1)
-	}
-
-	output, err := sqsClient.SendMessageBatch(&testQueueName, batch)
-	test.AssertNotError(t, err)
-	test.AssertEqual(t, len(output.Successful), 10)
-	test.AssertEqual(t, len(output.Failed), 0)
-
-	var messages []*kitsune.ReceiveSuccessfulEntry
-	for len(messages) < 10 {
-		msgs, err := sqsClient.ReceiveMessages(&testQueueName)
-		test.AssertNotError(t, err)
-		messages = append(messages, msgs.Successful...)
-	}
-
-	for _, message := range messages {
-		test.AssertEqual(t, *message.Message.Body, "TestPayload")
-		err := sqsClient.DeleteMessage(&testQueueName, message.Message.ReceiptHandle)
-		test.AssertNotError(t, err)
-	}
-}
-
-func TestBatch_SendReceiveAndDeleteBatch_WithKMSAndS3(t *testing.T) {
-	sqsClient := getClient(t, kitsune.S3Bucket(testBucket), kitsune.KMSKeyID(testKMSKey))
-
-	payload, err := ioutil.ReadFile("../testdata/size262145Bytes.txt")
-	test.AssertNotError(t, err)
-
-	batch := kitsune.NewBatch()
-	for i := 0; i < 10; i++ {
-		if i%2 == 0 {
-			n, err := batch.Add(payload, strconv.Itoa(i), nil)
-			test.AssertNotError(t, err)
-			test.AssertEqual(t, n, i+1)
-		} else {
-			n, err := batch.Add([]byte("TestPayload"+strconv.Itoa(i)), strconv.Itoa(i), nil)
-			test.AssertNotError(t, err)
-			test.AssertEqual(t, n, i+1)
-		}
-	}
-
-	output, err := sqsClient.SendMessageBatch(&testQueueName, batch)
-	test.AssertNotError(t, err)
-	test.AssertEqual(t, len(output.Successful), 10)
-	test.AssertEqual(t, len(output.Failed), 0)
-
-	var messages []*kitsune.ReceiveSuccessfulEntry
-	for len(messages) < 10 {
-		msgs, err := sqsClient.ReceiveMessages(&testQueueName)
-		test.AssertNotError(t, err)
-		messages = append(messages, msgs.Successful...)
-	}
-
-	for _, message := range messages {
-		err := sqsClient.DeleteMessage(&testQueueName, message.Message.ReceiptHandle)
-		test.AssertNotError(t, err)
-	}
 }

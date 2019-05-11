@@ -15,8 +15,6 @@ import (
 	"io/ioutil"
 	"math"
 	"strconv"
-	"sync"
-	"sync/atomic"
 	"time"
 )
 
@@ -212,144 +210,80 @@ func (c *Client) SendMessage(queueName *string, payload []byte) error {
 // message was uploaded if put on the message attributes. This means an no of attributes error can be thrown even though this
 // function is called with less than maximum number of attributes.
 func (c *Client) SendMessageWithAttributes(queueName *string, payload []byte, messageAttributes map[string]*sqs.MessageAttributeValue) error {
-	event := &sqsSendEvent{
-		payload:           payload,
-		messageAttributes: messageAttributes,
-	}
+	payld := payload
+	var err error
 
 	// Compress payload if compression is enabled
 	if c.opts.compressionEnabled {
-		if err := compress(event); err != nil {
+		payld, err = compressData(payld)
+		if err != nil {
 			return err
 		}
+
+		if messageAttributes == nil {
+			messageAttributes = make(map[string]*sqs.MessageAttributeValue)
+		}
+
+		messageAttributes[AttributeCompression] = &sqs.MessageAttributeValue{DataType: aws.String("String"), StringValue: aws.String("gzip")}
 	}
 
 	// Encrypt the payload if a KMS key is configured
 	if c.opts.kmsKeyID != "" {
-		if err := c.encrypt(event); err != nil {
+		payld, err = c.encrypt(payld)
+		if err != nil {
 			return err
 		}
+
+		if messageAttributes == nil {
+			messageAttributes = make(map[string]*sqs.MessageAttributeValue)
+		}
+
+		messageAttributes[AttributeNameKMSKey] = &sqs.MessageAttributeValue{DataType: aws.String("String"), StringValue: &c.opts.kmsKeyID}
 	}
 
 	// Put payload to S3 if S3 is forced of message is larger than max size. Bucket needs to be configured.
-	if (c.opts.forceS3 || event.size() > maxMessageSize) && c.opts.s3Bucket != "" {
-		if err := c.uploadToS3(event); err != nil {
+	if (c.opts.forceS3 || size(payld, messageAttributes) > maxMessageSize) && c.opts.s3Bucket != "" {
+		payld, err = c.uploadToS3(payld)
+		if err != nil {
 			return err
 		}
+
+		if messageAttributes == nil {
+			messageAttributes = make(map[string]*sqs.MessageAttributeValue)
+		}
+
+		messageAttributes[AttributeNameS3Bucket] = &sqs.MessageAttributeValue{DataType: aws.String("String"), StringValue: &c.opts.s3Bucket}
 	}
 
-	return c.awsSQSClient.sendMessage(queueName, event)
+	return c.awsSQSClient.sendMessage(queueName, payld, messageAttributes)
 }
 
-// SendMessageBatch sends a batch of messages to SQS. Messages are compressed, encrypted and sent to S3 in the same way they would
-// if sent as a single message. Note thay rrrors caught before sending to SQS are added to the sqs.SendMessageBatchOutput. So all
-// entries in the Failed slice is not necessarily from calling SQS.
-func (c *Client) SendMessageBatch(queueName *string, batch *Batch) (*sqs.SendMessageBatchOutput, error) {
-	if atomic.LoadUint32(&batch.sent) == 1 {
-		return nil, ErrorBatchAlreadySent
-	}
-
-	batch.m.Lock()
-	defer batch.m.Unlock()
-	if batch.sent == 0 {
-		defer atomic.StoreUint32(&batch.sent, 1)
-	} else {
-		return nil, ErrorBatchAlreadySent
-	}
-
-	var entries []*sqs.SendMessageBatchRequestEntry
-	var failed []*sqs.BatchResultErrorEntry
-	for _, event := range batch.events {
-		// Compress payload if compression is enabled
-		if c.opts.compressionEnabled {
-			if err := compress(event); err != nil {
-				failed = append(failed, getBatchResultError(&event.id, err))
-				continue
-			}
-		}
-
-		// Encrypt the payload if a KMS key is configured
-		if c.opts.kmsKeyID != "" {
-			if err := c.encrypt(event); err != nil {
-				failed = append(failed, getBatchResultError(&event.id, err))
-				continue
-			}
-		}
-
-		// Put payload to S3 if S3 is forced of message is larger than max size. Bucket needs to be configured.
-		if (c.opts.forceS3 || event.size() > maxMessageSize) && c.opts.s3Bucket != "" {
-			if err := c.uploadToS3(event); err != nil {
-				failed = append(failed, getBatchResultError(&event.id, err))
-				continue
-			}
-		}
-
-		batchRequestEntry, err := c.awsSQSClient.bacthRequestEntry(event)
-		if err != nil {
-			failed = append(failed, getBatchResultError(&event.id, err))
-		} else {
-			entries = append(entries, batchRequestEntry)
-		}
-	}
-
-	batchOutput, err := c.awsSQSClient.sendMessageBatch(queueName, entries)
-	batchOutput.Failed = append(batchOutput.Failed, failed...)
-	return batchOutput, err
-}
-
-func compress(s *sqsSendEvent) error {
-	if compressed, err := compressData(s.payload); err == nil {
-		s.payload = compressed
-	} else {
-		return err
-	}
-
-	if s.messageAttributes == nil {
-		s.messageAttributes = make(map[string]*sqs.MessageAttributeValue)
-	}
-	s.messageAttributes[AttributeCompression] = &sqs.MessageAttributeValue{DataType: aws.String("String"), StringValue: aws.String("gzip")}
-
-	return nil
-}
-
-func (c *Client) encrypt(s *sqsSendEvent) error {
-	encryptedEvent, err := c.awsKMSClient.encrypt(&c.opts.kmsKeyID, s.payload)
+func (c *Client) encrypt(payload []byte) ([]byte, error) {
+	encryptedEvent, err := c.awsKMSClient.encrypt(&c.opts.kmsKeyID, payload)
 	if err != nil {
-		return fmt.Errorf("error encrypting payload: %v", err)
+		return nil, fmt.Errorf("error encrypting payload: %v", err)
 	}
 
 	encryptedEventBytes, err := json.Marshal(encryptedEvent)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
-	s.payload = encryptedEventBytes
-	if s.messageAttributes == nil {
-		s.messageAttributes = make(map[string]*sqs.MessageAttributeValue)
-	}
-	s.messageAttributes[AttributeNameKMSKey] = &sqs.MessageAttributeValue{DataType: aws.String("String"), StringValue: &c.opts.kmsKeyID}
-
-	return nil
+	return encryptedEventBytes, nil
 }
 
-func (c *Client) uploadToS3(s *sqsSendEvent) error {
-	fileEvent, err := c.awsS3Client.putObject(&c.opts.s3Bucket, s.payload)
+func (c *Client) uploadToS3(payload []byte) ([]byte, error) {
+	fileEvent, err := c.awsS3Client.putObject(&c.opts.s3Bucket, payload)
 	if err != nil {
-		return fmt.Errorf("error putting object to S3: %v", err)
+		return nil, fmt.Errorf("error putting object to S3: %v", err)
 	}
 
 	fileEventBytes, err := json.Marshal(&fileEvent)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
-	s.payload = fileEventBytes
-	if s.messageAttributes == nil {
-		s.messageAttributes = make(map[string]*sqs.MessageAttributeValue)
-	}
-	s.messageAttributes[AttributeNameS3Bucket] = &sqs.MessageAttributeValue{DataType: aws.String("String"), StringValue: &c.opts.s3Bucket}
-
-	return err
+	return fileEventBytes, err
 }
 
 // The compressed string is base64 encoded because the compressed data might contain characters that are invalid and SQS would
@@ -551,57 +485,4 @@ func max(a, b int64) int64 {
 	}
 
 	return b
-}
-
-// ErrorMaxBatchSizeExceeded is returned when trying to add more to a batch than is allowed
-var ErrorMaxBatchSizeExceeded = fmt.Errorf("maximum batch size of %d exceeded", maxBatchSize)
-
-// ErrorIDNotUnique is returned when adding a message to a batch with the same id as another message
-var ErrorIDNotUnique = errors.New("all ids in a batch needs to be unique")
-
-// ErrorBatchAlreadySent is returned when trying to send a batch which is already sent.
-var ErrorBatchAlreadySent = errors.New("all ids in a batch needs to be unique")
-
-// Batch is used to aggregate messages and send as a batch to SQS.
-type Batch struct {
-	size   int
-	ids    map[string]struct{}
-	events []*sqsSendEvent
-	m      sync.Mutex
-	sent   uint32
-}
-
-// NewBatch returns a new Batch object.
-func NewBatch() *Batch {
-	return &Batch{
-		ids: make(map[string]struct{}),
-	}
-}
-
-// Size returns the size of a batch.
-func (b *Batch) Size() int {
-	return b.size
-}
-
-// Add adds a message to a batch. Returns the number of messages in the batch and error.
-func (b *Batch) Add(payload []byte, id string, messageAttributes map[string]*sqs.MessageAttributeValue) (int, error) {
-	if b.size >= maxBatchSize {
-		return b.size, ErrorMaxBatchSizeExceeded
-	}
-
-	if _, exists := b.ids[id]; exists {
-		return b.size, ErrorIDNotUnique
-	}
-
-	event := &sqsSendEvent{
-		payload:           payload,
-		messageAttributes: messageAttributes,
-		id:                id,
-	}
-
-	b.events = append(b.events, event)
-
-	b.size++
-	b.ids[id] = struct{}{}
-	return b.size, nil
 }

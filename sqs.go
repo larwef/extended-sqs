@@ -13,8 +13,6 @@ const (
 	maxMessageSize = 256 * 1024
 	// The maximum number of custom attributes are 10.
 	maxNumberOfAttributes = 10
-	// Maximum number of messages allowed in a batch.
-	maxBatchSize = 10
 )
 
 // ErrorMaxMessageSizeExceeded is returned when the combined size of the payload and the message attributes exceeds maxMessageSize.
@@ -39,6 +37,16 @@ func (s *sqsSendEvent) size() int {
 	return size
 }
 
+func size(payload []byte, messageAttributes map[string]*sqs.MessageAttributeValue) int {
+	size := len(payload)
+
+	for key, value := range messageAttributes {
+		size += len(key) + len(*value.DataType) + len(*value.StringValue)
+	}
+
+	return size
+}
+
 type sqsClient struct {
 	opts       *options
 	queueCache map[string]string
@@ -54,12 +62,12 @@ func newSQSClient(awsSQS sqsiface.SQSAPI, opts *options) *sqsClient {
 	}
 }
 
-func (s *sqsClient) sendMessage(queueName *string, event *sqsSendEvent) error {
-	if len(event.messageAttributes) > maxNumberOfAttributes {
+func (s *sqsClient) sendMessage(queueName *string, payload []byte, messageAttributes map[string]*sqs.MessageAttributeValue) error {
+	if len(messageAttributes) > maxNumberOfAttributes {
 		return ErrorMaxNumberOfAttributesExceeded
 	}
 
-	if event.size() > maxMessageSize {
+	if size(payload, messageAttributes) > maxMessageSize {
 		return ErrorMaxMessageSizeExceeded
 	}
 
@@ -70,8 +78,8 @@ func (s *sqsClient) sendMessage(queueName *string, event *sqsSendEvent) error {
 
 	smi := &sqs.SendMessageInput{
 		DelaySeconds:      &s.opts.delaySeconds,
-		MessageAttributes: event.messageAttributes,
-		MessageBody:       aws.String(string(event.payload)),
+		MessageAttributes: messageAttributes,
+		MessageBody:       aws.String(string(payload)),
 		QueueUrl:          queueURL,
 	}
 

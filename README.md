@@ -61,7 +61,7 @@ client, err := kitsune.New(&config, options...)
 - [x] Encrypt and decrypt with KMS
     - [x] Cache KMS key
 - [x] Compression
-- [x] Batch sending with compression, encryption and large payloads to S3
+- [ ] Batch sending with compression, encryption and large payloads to S3
 - [ ] Simple message consumer which handles message lifecycle (receive, process, delete, backoff)
 
 ## Policy suggestion
