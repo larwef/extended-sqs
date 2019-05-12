@@ -1,6 +1,7 @@
 module github.com/larwef/kitsune
 
 require (
+	github.com/aws/aws-lambda-go v1.10.0
 	github.com/aws/aws-sdk-go v1.15.81
 	github.com/davecgh/go-spew v1.1.1 // indirect
 	github.com/google/uuid v1.1.0

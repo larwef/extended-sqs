@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/aws/aws-lambda-go/events"
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/aws/session"
 	"github.com/aws/aws-sdk-go/service/kms"
@@ -57,6 +58,7 @@ type options struct {
 	compressionEnabled          bool
 	kmsKeyCacheEnabled          bool
 	kmsKeyCacheExpirationPeriod time.Duration
+	skipSQSClient               bool
 }
 
 var defaultClientOptions = options{
@@ -72,6 +74,7 @@ var defaultClientOptions = options{
 	compressionEnabled:          false,
 	kmsKeyCacheEnabled:          false,
 	kmsKeyCacheExpirationPeriod: 5 * time.Minute,
+	skipSQSClient:               false,
 }
 
 // ClientOption sets configuration options for a awsSQSClient.
@@ -165,6 +168,12 @@ func KMSKeyCacheExpirationPeriod(t time.Duration) ClientOption {
 	return func(o *options) { o.kmsKeyCacheExpirationPeriod = t }
 }
 
+// SkipSQSClient can be used to skip creation of the SQS client. This is can be used in Lambdas with SQS trigger where handling
+// SQS is not needed, but fetching from S3 and decrypting with KMS is.
+func SkipSQSClient(b bool) ClientOption {
+	return func(o *options) { o.skipSQSClient = b }
+}
+
 // New returns a new awsSQSClient with configuration set as defined by the ClientOptions. Will create a s3Client from the
 // aws.Config if a bucket is set. Same goes for KMS.
 func New(awsConfig *aws.Config, opt ...ClientOption) (*Client, error) {
@@ -178,7 +187,10 @@ func New(awsConfig *aws.Config, opt ...ClientOption) (*Client, error) {
 		o(&opts)
 	}
 
-	sqsc := newSQSClient(sqs.New(awsSession), &opts)
+	var sqsc *sqsClient
+	if !opts.skipSQSClient {
+		sqsc = newSQSClient(sqs.New(awsSession), &opts)
+	}
 
 	var s3c *s3Client
 	if opts.s3Bucket != "" {
@@ -360,6 +372,55 @@ func (c *Client) ReceiveMessages(queueName *string) ([]*sqs.Message, error) {
 	}
 
 	return messages, nil
+}
+
+// ReceiveSQSEvent unpacks payloads in a Lambda SQSEvent if compressed, encrypted or uploaded to S3 by the sennder.
+func (c *Client) ReceiveSQSEvent(event *events.SQSEvent) (*events.SQSEvent, error) {
+	// Loop through messages and check if payload is located in S3 and/or if its encrypted.
+	for i := range event.Records {
+		// If S3 bucket is included the payload is located in S3 an needs to be fetched
+		if _, exists := event.Records[i].MessageAttributes[AttributeNameS3Bucket]; exists && c.awsS3Client != nil {
+			var fe fileEvent
+			if err := json.Unmarshal([]byte(event.Records[i].Body), &fe); err != nil {
+				return nil, err
+			}
+
+			if payload, err := c.awsS3Client.getObject(&fe); err == nil {
+				event.Records[i].Body = string(payload)
+				delete(event.Records[i].MessageAttributes, AttributeNameS3Bucket)
+			} else {
+				return nil, err
+			}
+		}
+
+		// If KMS key is included the payload is encrypted and needs to be decrypted
+		if _, exists := event.Records[i].MessageAttributes[AttributeNameKMSKey]; exists && c.awsKMSClient != nil {
+			var ee encryptedEvent
+			if err := json.Unmarshal([]byte(event.Records[i].Body), &ee); err != nil {
+				return nil, err
+			}
+
+			if decrypted, err := c.awsKMSClient.decrypt(&ee); err == nil {
+				event.Records[i].Body = string(decrypted)
+				delete(event.Records[i].MessageAttributes, AttributeNameKMSKey)
+			} else {
+				return nil, err
+			}
+		}
+
+		// If compression key is included the payload needs to be decompressed
+		if _, exists := event.Records[i].MessageAttributes[AttributeCompression]; exists {
+			buf := []byte(event.Records[i].Body)
+			if decompressed, err := decompressData(buf); err == nil {
+				event.Records[i].Body = string(decompressed)
+				delete(event.Records[i].MessageAttributes, AttributeCompression)
+			} else {
+				return nil, err
+			}
+		}
+	}
+
+	return event, nil
 }
 
 func decompressData(payload []byte) ([]byte, error) {

@@ -3,6 +3,7 @@ package kitsune
 import (
 	"bytes"
 	"encoding/json"
+	"github.com/aws/aws-lambda-go/events"
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/service/kms/kmsiface"
 	"github.com/aws/aws-sdk-go/service/s3"
@@ -529,4 +530,122 @@ func TestClient_ReceiveMessage_Compressed(t *testing.T) {
 	messages, err := sqsClient.ReceiveMessages(&testQueue)
 	test.AssertNotError(t, err)
 	test.AssertEqual(t, *messages[0].Body, "TestPayload")
+}
+
+func TestClient_ReceiveSQSEvent(t *testing.T) {
+	for i := 1; i <= 10; i++ {
+		receiveSQSEventWithNRecords(t, i)
+	}
+}
+
+func receiveSQSEventWithNRecords(t *testing.T, n int) {
+	sqsClient := getClient(nil, nil, nil)
+
+	var payloads []string
+	for i := 0; i < n; i++ {
+		payloads = append(payloads, "Testpayload"+strconv.Itoa(i))
+	}
+
+	event := getSQSEvent(payloads)
+
+	receivedEvent, err := sqsClient.ReceiveSQSEvent(&event)
+	test.AssertNotError(t, err)
+
+	for i, elem := range receivedEvent.Records {
+		test.AssertEqual(t, elem.Body, "Testpayload"+strconv.Itoa(i))
+	}
+	test.AssertEqual(t, len(receivedEvent.Records), n)
+}
+
+func getSQSEvent(payloads []string) events.SQSEvent {
+	var event events.SQSEvent
+
+	for _, payload := range payloads {
+		event.Records = append(event.Records, events.SQSMessage{
+			Body: payload,
+		})
+	}
+
+	return event
+}
+
+func TestClient_ReceiveSQSEvent_FileEvent(t *testing.T) {
+	payload, err := ioutil.ReadFile("test/testdata/size262145Bytes.txt")
+	test.AssertNotError(t, err)
+
+	// Getting S3 mock and Setting handler function for GetObject. Check that the right bucket is called and with the right key.
+	// Return a payload which should appear in the response instead of the fileEvent that was put on the queue.
+	s3Mock := &test.S3Mock{}
+	s3Mock.GetObjectHandler = func(input *s3.GetObjectInput) (*s3.GetObjectOutput, error) {
+		test.AssertEqual(t, *input.Bucket, "test-bucket")
+		test.AssertEqual(t, *input.Key, "testFile")
+		bufferString := ioutil.NopCloser(bytes.NewBufferString(string(payload)))
+		return &s3.GetObjectOutput{
+			Body: bufferString,
+		}, nil
+	}
+
+	// Get client with S3 mock.
+	sqsClient := getClient(nil, s3Mock, nil, S3Bucket("test-bucket"))
+
+	// Create and marshal fileEvent and put the file event on the SQS mock.
+	fe := &fileEvent{
+		Size:     aws.Int64(int64(262145)),
+		Bucket:   aws.String("test-bucket"),
+		Filename: aws.String("testFile"),
+	}
+
+	febytes, err := json.Marshal(fe)
+	test.AssertNotError(t, err)
+
+	messageAttributes := make(map[string]events.SQSMessageAttribute)
+	messageAttributes[AttributeNameS3Bucket] = events.SQSMessageAttribute{
+		DataType:    "String",
+		StringValue: aws.String("test-bucket"),
+	}
+	sqsEventMessage := events.SQSMessage{
+		Body:              string(febytes),
+		MessageAttributes: messageAttributes,
+	}
+
+	sqsEvent := events.SQSEvent{
+		Records: []events.SQSMessage{sqsEventMessage},
+	}
+
+	receivedEvent, err := sqsClient.ReceiveSQSEvent(&sqsEvent)
+	test.AssertNotError(t, err)
+	test.AssertEqual(t, receivedEvent.Records[0].Body, string(payload))
+}
+
+func TestClient_ReceiveSQSEvent_KMS(t *testing.T) {
+	kmsMock := &test.KmsMock{}
+
+	sqsClient := getClient(nil, nil, kmsMock, KMSKeyID("keyID"))
+
+	ee := encryptedEvent{
+		EncryptedEncryptionKey: []byte{1, 2, 3, 0, 120, 117, 254, 40, 232, 55, 217, 84, 174, 75, 59, 2, 126, 80, 228, 40, 30, 154, 9, 181, 250, 93, 124, 148, 204, 162, 114, 168, 221, 48, 205, 156, 51, 1, 175, 64, 33, 234, 59, 118, 135, 116, 69, 35, 55, 119, 205, 97, 34, 121, 0, 0, 0, 126, 48, 124, 6, 9, 42, 134, 72, 134, 247, 13, 1, 7, 6, 160, 111, 48, 109, 2, 1, 0, 48, 104, 6, 9, 42, 134, 72, 134, 247, 13, 1, 7, 1, 48, 30, 6, 9, 96, 134, 72, 1, 101, 3, 4, 1, 46, 48, 17, 4, 12, 206, 50, 137, 217, 81, 233, 59, 171, 93, 91, 58, 132, 2, 1, 16, 128, 59, 113, 1, 196, 78, 149, 34, 228, 82, 195, 190, 192, 248, 95, 192, 11, 108, 200, 117, 57, 165, 152, 54, 95, 169, 176, 53, 71, 217, 119, 34, 10, 26, 143, 240, 124, 202, 53, 167, 94, 151, 240, 14, 124, 48, 154, 153, 11, 46, 189, 202, 163, 21, 232, 230, 10, 202, 105, 98, 175},
+		KeyID:                  "KeyID",
+		Payload:                []byte{102, 205, 159, 72, 200, 107, 205, 104, 53, 185, 73, 108, 171, 58, 12, 177, 114, 113, 72, 157, 2, 234, 89, 248, 169, 25, 247, 54, 249, 249, 189, 35, 226, 248, 252, 167, 110, 245, 127},
+	}
+
+	eebytes, err := json.Marshal(ee)
+	test.AssertNotError(t, err)
+
+	messageAttributes := make(map[string]events.SQSMessageAttribute)
+	messageAttributes[AttributeNameKMSKey] = events.SQSMessageAttribute{
+		DataType:    "String",
+		StringValue: aws.String("keyID"),
+	}
+	sqsEventMessage := events.SQSMessage{
+		Body:              string(eebytes),
+		MessageAttributes: messageAttributes,
+	}
+
+	sqsEvent := events.SQSEvent{
+		Records: []events.SQSMessage{sqsEventMessage},
+	}
+
+	receivedEvent, err := sqsClient.ReceiveSQSEvent(&sqsEvent)
+	test.AssertNotError(t, err)
+	test.AssertEqual(t, receivedEvent.Records[0].Body, "TestPayload")
 }
