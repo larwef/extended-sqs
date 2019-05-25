@@ -176,12 +176,7 @@ func SkipSQSClient(b bool) ClientOption {
 
 // New returns a new awsSQSClient with configuration set as defined by the ClientOptions. Will create a s3Client from the
 // aws.Config if a bucket is set. Same goes for KMS.
-func New(awsConfig *aws.Config, opt ...ClientOption) (*Client, error) {
-	awsSession, err := session.NewSession(awsConfig)
-	if err != nil {
-		return nil, fmt.Errorf("Error getting AWS awsSession: %v ", err)
-	}
-
+func New(awsSession *session.Session, opt ...ClientOption) (*Client, error) {
 	opts := defaultClientOptions
 	for _, o := range opt {
 		o(&opts)

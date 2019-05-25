@@ -5,6 +5,7 @@ package integration
 import (
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/aws/credentials"
+	"github.com/aws/aws-sdk-go/aws/session"
 	"github.com/aws/aws-sdk-go/service/sqs"
 	"github.com/google/uuid"
 	"github.com/larwef/kitsune"
@@ -21,7 +22,7 @@ var testBucket = "sqs-client-test-bucket"
 var testKMSKey = "alias/sqs-client-test-key"
 
 func getClient(t *testing.T, opts ...kitsune.ClientOption) *kitsune.Client {
-	config := aws.Config{
+	config := &aws.Config{
 		Region:      &awsRegion,
 		Credentials: credentials.NewSharedCredentials("", profile),
 	}
@@ -34,7 +35,9 @@ func getClient(t *testing.T, opts ...kitsune.ClientOption) *kitsune.Client {
 
 	options = append(options, opts...)
 
-	client, err := kitsune.New(&config, options...)
+	awsSession, err := session.NewSession(config)
+	test.AssertNotError(t, err)
+	client, err := kitsune.New(awsSession, options...)
 	test.AssertNotError(t, err)
 
 	return client
