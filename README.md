@@ -1,7 +1,7 @@
 [![Build Status](https://travis-ci.org/larwef/kitsune.svg?branch=master)](https://travis-ci.org/larwef/kitsune)
 [![Go Report Card](https://goreportcard.com/badge/github.com/larwef/kitsune)](https://goreportcard.com/report/github.com/larwef/kitsune)
 
-# Kitsune SQS Client
+# Extended SQS Client
 Go client for Amazon Simple Queue Service with support for messages larger than the max size of an SQS message by saving to S3 and
 encryption using Key Management Service.
 
@@ -20,11 +20,11 @@ ClientOptions. NB: S3 and KMS is not a part of the default configuration. The on
 client should save large payloads and the KMS key to be used for encryption.
 
 ```
-options := []kitsune.ClientOption{
-		kitsune.S3Bucket("myS3Bucket"),
-		kitsune.KMSKeyID("myKMSKeyID"),
-		kitsune.InitialVisibilityTimeout(10),
-		kitsune.MaxVisibilityTimeout(100),
+options := []extended-sqs.ClientOption{
+		extended-sqs.S3Bucket("myS3Bucket"),
+		extended-sqs.KMSKeyID("myKMSKeyID"),
+		extended-sqs.InitialVisibilityTimeout(10),
+		extended-sqs.MaxVisibilityTimeout(100),
 	}
 ```
 
@@ -32,7 +32,7 @@ Pass the aws.Config and ClientOptions to New and you're good to go. New will ret
 aws.Session
 
 ```
-client, err := kitsune.New(&config, options...)
+client, err := extended-sqs.New(&config, options...)
 ```
 
 ## Client Options
